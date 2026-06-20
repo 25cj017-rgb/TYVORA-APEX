@@ -1,0 +1,119 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;750;900&family=Syncopate:wght@400;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-background: #050505;
+  --color-foreground: #F8FAFC;
+  
+  --color-card: #050505;
+  --color-card-foreground: #F8FAFC;
+  
+  --color-popover: #050505;
+  --color-popover-foreground: #F8FAFC;
+  
+  --color-primary: #050505;
+  --color-primary-foreground: #00ffcc;
+  
+  --color-secondary: #050505;
+  --color-secondary-foreground: #00ffcc;
+  
+  --color-accent-blue: #00ffcc;
+  --color-accent-purple: #8B5CF6;
+  
+  --color-muted: #111111;
+  --color-muted-foreground: #94A3B8;
+  
+  --color-accent: #00ffcc;
+  --color-accent-foreground: #050505;
+  
+  --color-destructive: #EF4444;
+  --color-destructive-foreground: #F8FAFC;
+  
+  --color-border: rgba(0, 255, 204, 0.15);
+  --color-input: rgba(0, 255, 204, 0.1);
+  --color-ring: #00ffcc;
+  
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  
+  --animate-pulse-glow: pulse-glow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-scanline: scanline 6s linear infinite;
+  
+  @keyframes pulse-glow {
+    0%, 100% {
+      opacity: 1;
+      filter: drop-shadow(0 0 15px rgba(0, 255, 204, 0.6));
+    }
+    50% {
+      opacity: 0.6;
+      filter: drop-shadow(0 0 5px rgba(0, 255, 204, 0.2));
+    }
+  }
+  
+  @keyframes scanline {
+    0% {
+      transform: translateY(-100%);
+    }
+    100% {
+      transform: translateY(100%);
+    }
+  }
+}
+
+/* Custom dark scrollbar for a premium space telemetry aesthetic */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #000000;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #050505;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 255, 204, 0.2);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #00ffcc;
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+  margin: 0;
+  padding: 0;
+}
+
+/* Futuristic background star grid styling */
+.space-grid {
+  background-image: 
+    radial-gradient(1px 1px at 20px 30px, #ffffff, rgba(0,0,0,0)),
+    radial-gradient(1px 1px at 40px 70px, rgba(255,255,255,0.5), rgba(0,0,0,0)),
+    radial-gradient(2px 2px at 50px 160px, #8B5CF6, rgba(0,0,0,0)),
+    radial-gradient(1px 1px at 80px 120px, #00ffcc, rgba(0,0,0,0)),
+    radial-gradient(2px 2px at 150px 100px, rgba(255,255,255,0.7), rgba(0,0,0,0));
+  background-size: 200px 200px;
+}
+
+/* High-tech glow elements */
+.neon-glow-blue {
+  box-shadow: 0 0 20px rgba(0, 255, 204, 0.15);
+  border: 1px solid rgba(0, 255, 204, 0.2);
+}
+
+.neon-glow-purple {
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.15);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+}
+
+.neon-text-blue {
+  text-shadow: 0 0 10px rgba(0, 255, 204, 0.5);
+}
+
+.neon-text-purple {
+  text-shadow: 0 0 10px rgba(139, 92, 246, 0.5);
+}
