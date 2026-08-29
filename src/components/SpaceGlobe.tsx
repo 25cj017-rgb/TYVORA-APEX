@@ -35,24 +35,36 @@ interface CesiumEventHandler {
   isDestroyed: () => boolean;
 }
 
+interface ConjunctionRef {
+  id: string;
+  primaryObject: string;
+  secondaryObject: string;
+  missDistance: number;
+  severity: string;
+}
+
 interface SpaceGlobeProps {
   satellites?: Satellite[];
+  debrisObjects?: Satellite[];
   selectedSatellite: Satellite;
   onSatelliteSelect?: (sat: Satellite) => void;
   isLandingMode?: boolean;
   onGlobeClick?: () => void;
   onTransitionComplete?: () => void;
   evasionPlan?: ManeuverPlan | null;
+  selectedConjunction?: ConjunctionRef | null;
 }
 
 export default function SpaceGlobe({ 
   satellites,
+  debrisObjects,
   selectedSatellite,
   onSatelliteSelect,
   isLandingMode = false, 
   onGlobeClick, 
   onTransitionComplete,
-  evasionPlan
+  evasionPlan,
+  selectedConjunction,
 }: SpaceGlobeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const showAllOrbits = useOrbitalStore(state => state.showAllOrbits);
@@ -397,48 +409,125 @@ export default function SpaceGlobe({
           }
         }
 
-        // Phase 5: Render the 3D Evasion Simulator Path if a burn plan is authorized
+        // ── DUAL TRAJECTORY VISUALIZATION ──────────────────────────────────
+        // When an evasion burn is authorized, we render TWO distinct paths:
+        //   1. RED solid line  — the original danger trajectory (where the satellite WOULD go)
+        //   2. CYAN dashed arc — the evasion trajectory (where it WILL go after the burn)
+        // This is the "trajectory divergence" view shown in the screenshot.
         if (isSelected && evasionPlan) {
+          // PATH 1: ORIGINAL DANGER TRAJECTORY (no burn applied — collision course)
+          const dangerPositions: any[] = [];
+          for (let i = 0; i <= 120; i++) {
+            const time = new Date(now.getTime() + i * 60000);
+            const pv = satellite.propagate(satrec, time);
+            const posEci = pv ? pv.position : null;
+            if (posEci && typeof posEci !== "boolean") {
+              const gmst = satellite.gstime(time);
+              const gd = satellite.eciToGeodetic(posEci, gmst);
+              dangerPositions.push(
+                Cesium.Cartesian3.fromDegrees(
+                  satellite.degreesLong(gd.longitude),
+                  satellite.degreesLat(gd.latitude),
+                  gd.height * 1000
+                )
+              );
+            }
+          }
+          if (dangerPositions.length > 0) {
+            const dangerPath = viewer.entities.add({
+              name: `${name} DANGER Trajectory`,
+              polyline: {
+                positions: dangerPositions,
+                width: 2.5,
+                material: new Cesium.PolylineGlowMaterialProperty({
+                  glowPower: 0.3,
+                  color: Cesium.Color.fromCssColorString("#ef4444").withAlpha(0.85),
+                }),
+              },
+            });
+            entityRefs.current.push(dangerPath);
+
+            // Danger label at the point of closest approach (midpoint of arc)
+            const midIdx = Math.floor(dangerPositions.length * 0.6);
+            if (dangerPositions[midIdx]) {
+              const dangerLabel = viewer.entities.add({
+                position: dangerPositions[midIdx],
+                label: {
+                  text: "⚠ COLLISION TRAJECTORY",
+                  font: "bold 11px Inter, monospace",
+                  style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                  fillColor: Cesium.Color.fromCssColorString("#ef4444"),
+                  outlineColor: Cesium.Color.BLACK,
+                  outlineWidth: 3,
+                  verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                  pixelOffset: new Cesium.Cartesian2(0, -16),
+                  showBackground: true,
+                  backgroundColor: new Cesium.Color(0.05, 0, 0, 0.8),
+                },
+              });
+              entityRefs.current.push(dangerLabel);
+            }
+          }
+
+          // PATH 2: EVASION TRAJECTORY (burn applied — safe clearance path)
           const evasionPositions: any[] = [];
-          for (let i = 0; i <= 100; i++) {
+          for (let i = 0; i <= 120; i++) {
             const time = new Date(now.getTime() + i * 60000);
             const positionAndVelocity = satellite.propagate(satrec, time);
             const positionEci = positionAndVelocity ? positionAndVelocity.position : null;
-            
             if (positionEci && typeof positionEci !== "boolean") {
               const gmst = satellite.gstime(time);
               const positionGd = satellite.eciToGeodetic(positionEci, gmst);
               const longitude = satellite.degreesLong(positionGd.longitude);
               const latitude = satellite.degreesLat(positionGd.latitude);
               let height = positionGd.height * 1000;
-              
-              // Exaggerate the projected miss distance visually for the dashboard operator
-              const visualExaggeration = 50; 
-              const divergence = Math.sin((i / 100) * Math.PI) * (evasionPlan.projectedMissDistanceKm * 1000 * visualExaggeration);
-              
+              // Bell-curve divergence: max at mid-point, converging back after TCA
+              const divergence = Math.sin((i / 120) * Math.PI) * (evasionPlan.projectedMissDistanceKm * 1000 * 60);
               if (evasionPlan.burnDirection === "PROGRADE") {
                 height += divergence;
               } else {
                 height -= divergence;
               }
-
               evasionPositions.push(Cesium.Cartesian3.fromDegrees(longitude, latitude, height));
             }
           }
+          if (evasionPositions.length > 0) {
+            const evasionArc = viewer.entities.add({
+              name: `${name} Evasion Path`,
+              polyline: {
+                positions: evasionPositions,
+                width: 3.5,
+                material: new Cesium.PolylineDashMaterialProperty({
+                  color: Cesium.Color.fromCssColorString("#00ffcc"),
+                  dashLength: 22.0,
+                }),
+              },
+            });
+            entityRefs.current.push(evasionArc);
 
-          const evasionArc = viewer.entities.add({
-            name: `${name} Evasion Path`,
-            polyline: {
-              positions: evasionPositions,
-              width: 3.5,
-              material: new Cesium.PolylineDashMaterialProperty({
-                color: Cesium.Color.fromCssColorString("#00ffcc"),
-                dashLength: 25.0,
-              }),
-            },
-          });
-          entityRefs.current.push(evasionArc);
+            // Evasion label at divergence peak
+            const peakIdx = Math.floor(evasionPositions.length * 0.5);
+            if (evasionPositions[peakIdx]) {
+              const evasionLabel = viewer.entities.add({
+                position: evasionPositions[peakIdx],
+                label: {
+                  text: `✓ MANEUVER  ΔV ${evasionPlan.deltaV_m_s} m/s | ${evasionPlan.burnDirection}`,
+                  font: "bold 11px Inter, monospace",
+                  style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+                  fillColor: Cesium.Color.fromCssColorString("#00ffcc"),
+                  outlineColor: Cesium.Color.BLACK,
+                  outlineWidth: 3,
+                  verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                  pixelOffset: new Cesium.Cartesian2(0, -16),
+                  showBackground: true,
+                  backgroundColor: new Cesium.Color(0, 0.05, 0.05, 0.8),
+                },
+              });
+              entityRefs.current.push(evasionLabel);
+            }
+          }
         }
+        // ── END DUAL TRAJECTORY ─────────────────────────────────────────────
 
         // Real-time dynamic sampling property for continuous live orbital motion
         const positionProperty = new Cesium.SampledPositionProperty();
@@ -510,6 +599,123 @@ export default function SpaceGlobe({
           });
           entityRefs.current.push(satEntity);
 
+          // ── RADAR VISUALIZATION ──────────────────────────────────────────
+          // Only renders on the selected satellite when it has an active
+          // conjunction threat. The global zoomed-out view stays perfectly clean.
+          if (isSelected && selectedConjunction) {
+            const isCritical = selectedConjunction.severity === "CRITICAL";
+            const threatColor = isCritical
+              ? Cesium.Color.fromCssColorString("#ef4444")
+              : Cesium.Color.fromCssColorString("#f59e0b");
+            const scanColor = Cesium.Color.fromCssColorString("#00ffcc");
+
+            // 1. Detection Cone — translucent funnel pointing down toward Earth
+            const coneLength = currentAlt * 0.55;
+            const coneEntity = viewer.entities.add({
+              position: positionProperty,
+              cylinder: {
+                length: coneLength,
+                topRadius: 0,
+                bottomRadius: currentAlt * 0.22,
+                material: scanColor.withAlpha(0.06),
+                outline: true,
+                outlineColor: scanColor.withAlpha(0.35),
+                outlineWidth: 1,
+                numberOfVerticalLines: 12,
+              },
+            });
+            entityRefs.current.push(coneEntity);
+
+            // 2. Threat Alert Ring — pulsing red/amber ring at satellite altitude
+            // Uses CallbackProperty so it continuously animates without a JS setInterval
+            const threatRing = viewer.entities.add({
+              position: positionProperty,
+              ellipse: {
+                semiMajorAxis: new Cesium.CallbackProperty(() => {
+                  const t = Date.now() / 800;
+                  return currentAlt * 0.28 + Math.abs(Math.sin(t)) * currentAlt * 0.06;
+                }, false),
+                semiMinorAxis: new Cesium.CallbackProperty(() => {
+                  const t = Date.now() / 800;
+                  return currentAlt * 0.28 + Math.abs(Math.sin(t)) * currentAlt * 0.06;
+                }, false),
+                height: currentAlt,
+                material: threatColor.withAlpha(0.0),
+                outline: true,
+                outlineColor: new Cesium.CallbackProperty(() => {
+                  const t = Date.now() / 800;
+                  const alpha = 0.25 + Math.abs(Math.sin(t)) * 0.65;
+                  return threatColor.withAlpha(alpha);
+                }, false),
+                outlineWidth: 2.5,
+              },
+            });
+            entityRefs.current.push(threatRing);
+
+            // 3. Radar Scan Sweep Ring — slower cyan ring showing active scanning
+            const scanRing = viewer.entities.add({
+              position: positionProperty,
+              ellipse: {
+                semiMajorAxis: new Cesium.CallbackProperty(() => {
+                  const t = Date.now() / 2200;
+                  return currentAlt * 0.18 + Math.abs(Math.sin(t)) * currentAlt * 0.10;
+                }, false),
+                semiMinorAxis: new Cesium.CallbackProperty(() => {
+                  const t = Date.now() / 2200;
+                  return currentAlt * 0.18 + Math.abs(Math.sin(t)) * currentAlt * 0.10;
+                }, false),
+                height: currentAlt,
+                material: scanColor.withAlpha(0.0),
+                outline: true,
+                outlineColor: new Cesium.CallbackProperty(() => {
+                  const t = Date.now() / 2200;
+                  const alpha = 0.1 + Math.abs(Math.sin(t)) * 0.4;
+                  return scanColor.withAlpha(alpha);
+                }, false),
+                outlineWidth: 1.5,
+              },
+            });
+            entityRefs.current.push(scanRing);
+
+            // 4. Ground Footprint — translucent threat zone projected on Earth's surface
+            const groundFootprint = viewer.entities.add({
+              position: Cesium.Cartesian3.fromDegrees(currentLong, currentLat, 100),
+              ellipse: {
+                semiMajorAxis: currentAlt * 0.55,
+                semiMinorAxis: currentAlt * 0.55,
+                height: 0,
+                material: threatColor.withAlpha(0.04),
+                outline: true,
+                outlineColor: threatColor.withAlpha(0.18),
+                outlineWidth: 1,
+              },
+            });
+            entityRefs.current.push(groundFootprint);
+
+            // 5. Vertical threat axis line — connecting satellite to its ground track
+            const axisLine = viewer.entities.add({
+              polyline: {
+                positions: [
+                  Cesium.Cartesian3.fromDegrees(currentLong, currentLat, 0),
+                  Cesium.Cartesian3.fromDegrees(currentLong, currentLat, currentAlt),
+                ],
+                width: 1,
+                material: new Cesium.PolylineDashMaterialProperty({
+                  color: threatColor.withAlpha(0.25),
+                  dashLength: 20.0,
+                }),
+              },
+            });
+            entityRefs.current.push(axisLine);
+
+            // Force Cesium out of requestRenderMode so CallbackProperty animations run
+            viewer.scene.requestRenderMode = false;
+          } else {
+            // Restore render optimization when no threat is selected
+            viewer.scene.requestRenderMode = true;
+          }
+          // ── END RADAR ────────────────────────────────────────────────────
+
           // FlyTo the selected satellite smoothly ONLY when a new evasion burn plan is authorized
           const isNewEvasionPlan = evasionPlan && (
             !prevEvasionPlanRef.current || 
@@ -530,10 +736,75 @@ export default function SpaceGlobe({
         }
       });
       prevEvasionPlanRef.current = evasionPlan;
+
+      // ── LIVE DEBRIS OBJECTS ────────────────────────────────────────────────
+      // Render real CelesTrak debris as small red warning markers on the globe.
+      // These appear as a separate layer — no orbit paths drawn to keep globe clean.
+      if (debrisObjects && debrisObjects.length > 0) {
+        debrisObjects.forEach((deb) => {
+          try {
+            const debSatrec = satellite.twoline2satrec(deb.tle_line1, deb.tle_line2);
+            const debPosAndVel = satellite.propagate(debSatrec, now);
+            const debEci = debPosAndVel ? debPosAndVel.position : null;
+            if (debEci && typeof debEci !== "boolean") {
+              const gmst = satellite.gstime(now);
+              const debGd = satellite.eciToGeodetic(debEci, gmst);
+              const debLon = satellite.degreesLong(debGd.longitude);
+              const debLat = satellite.degreesLat(debGd.latitude);
+              const debAlt = debGd.height * 1000;
+
+              // Sample position property for animated debris movement
+              const debPosProp = new Cesium.SampledPositionProperty();
+              for (let i = -5; i <= 30; i += 1) {
+                const st = new Date(now.getTime() + i * 60000);
+                const dpv = satellite.propagate(debSatrec, st);
+                const de = dpv ? dpv.position : null;
+                if (de && typeof de !== "boolean") {
+                  const dg = satellite.gstime(st);
+                  const dgd = satellite.eciToGeodetic(de, dg);
+                  debPosProp.addSample(
+                    Cesium.JulianDate.fromDate(st),
+                    Cesium.Cartesian3.fromDegrees(
+                      satellite.degreesLong(dgd.longitude),
+                      satellite.degreesLat(dgd.latitude),
+                      dgd.height * 1000
+                    )
+                  );
+                }
+              }
+
+              const debEntity = viewer.entities.add({
+                id: `debris-${deb.norad_id}`,
+                position: debPosProp,
+                point: {
+                  pixelSize: 5,
+                  color: Cesium.Color.fromCssColorString("#ef4444").withAlpha(0.9),
+                  outlineColor: Cesium.Color.fromCssColorString("#ef4444").withAlpha(0.4),
+                  outlineWidth: 3,
+                },
+                label: {
+                  text: deb.name.replace("COSMOS 2251 DEB", "DEB").replace("IRIDIUM 33 DEB", "IRID-DEB"),
+                  font: "9px monospace",
+                  style: Cesium.LabelStyle.FILL,
+                  fillColor: Cesium.Color.fromCssColorString("#ef4444").withAlpha(0.7),
+                  verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+                  pixelOffset: new Cesium.Cartesian2(0, -10),
+                  distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 3000000), // Only show label when zoomed in < 3000km
+                },
+              });
+              entityRefs.current.push(debEntity);
+            }
+          } catch (e) {
+            // Skip invalid debris TLE
+          }
+        });
+      }
+      // ── END DEBRIS RENDER ──────────────────────────────────────────────────
+
     } catch (err) {
       console.error("Error drawing multi-satellite fleet on 3D globe:", err);
     }
-  }, [satellites, selectedSatellite, evasionPlan, cesiumLoaded, isLandingMode, showAllOrbits]);
+  }, [satellites, debrisObjects, selectedSatellite, evasionPlan, selectedConjunction, cesiumLoaded, isLandingMode, showAllOrbits]);
 
   // 4. Click interaction logic for picking 3D Satellite Models
   useEffect(() => {

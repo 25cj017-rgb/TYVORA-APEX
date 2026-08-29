@@ -32,7 +32,7 @@ import ConjunctionNetworkModal from "../components/ConjunctionNetworkModal";
 import { Satellite, ConjunctionEvent, ManeuverPlan } from "@/types";
 import { supabase } from "@/lib/supabase";
 import { useOrbitalStore } from "../store/useOrbitalStore";
-import { useActiveSatellites, useConjunctionAlerts, useTelemetryStream } from "../hooks/useSpaceQueries";
+import { useActiveSatellites, useConjunctionAlerts, useTelemetryStream, useLiveDebris } from "../hooks/useSpaceQueries";
 
 // Dynamically import SpaceGlobe to bypass server-side window errors
 const SpaceGlobe = dynamic(() => import("../components/SpaceGlobe"), {
@@ -214,6 +214,7 @@ export default function Home() {
   const { data: qSatellites } = useActiveSatellites();
   const { data: qConjunctions } = useConjunctionAlerts(qSatellites);
   const { data: qTelemetry } = useTelemetryStream(qSatellites);
+  const { data: liveDebris = [] } = useLiveDebris();
 
   // Sync React Query data to Zustand store
   useEffect(() => {
@@ -906,10 +907,12 @@ export default function Home() {
                 {selectedSatellite ? (
                   <SpaceGlobe 
                     satellites={activeSatellites}
+                    debrisObjects={liveDebris}
                     selectedSatellite={selectedSatellite} 
                     onSatelliteSelect={setSelectedSatellite}
                     isLandingMode={false}
                     evasionPlan={evasionPlan}
+                    selectedConjunction={selectedConjunction}
                   />
                 ) : (
                   <div className="flex-1 h-full flex items-center justify-center font-mono text-zinc-500 bg-zinc-950">

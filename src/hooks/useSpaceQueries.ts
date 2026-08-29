@@ -226,3 +226,43 @@ export function useTelemetryStream(satellites?: ValidatedSatellite[]) {
   });
 }
 
+// ── LIVE DEBRIS HOOK ──────────────────────────────────────────────────────────
+// Fetches real Cosmos-2251 / Iridium-33 debris TLEs from CelesTrak via our
+// /api/debris proxy route. These are actual catalogued objects tracked by NORAD.
+async function fetchLiveDebris(): Promise<ValidatedSatellite[]> {
+  try {
+    const response = await fetch("/api/debris");
+    if (!response.ok) throw new Error("Debris API failed");
+    const json = await response.json();
+    if (json.success && Array.isArray(json.debris) && json.debris.length > 0) {
+      // Map debris objects into our satellite schema for globe rendering
+      return json.debris
+        .filter((d: any) => d.tle_line1 && d.tle_line2)
+        .map((d: any) => ({
+          norad_id: d.norad_id,
+          name: d.name,
+          tle_line1: d.tle_line1,
+          tle_line2: d.tle_line2,
+          status: "ACTIVE" as const,
+          last_updated: d.last_updated,
+          altitudeKm: d.altitudeKm || 780,
+          velocityKmS: d.velocityKmS || 7.46,
+          inclinationDeg: d.inclinationDeg || 74.0,
+          riskLevel: "HIGH" as const,
+        }));
+    }
+  } catch (err) {
+    console.warn("Live debris fetch failed:", err);
+  }
+  return [];
+}
+
+export function useLiveDebris() {
+  return useQuery({
+    queryKey: ["debris", "live"],
+    queryFn: fetchLiveDebris,
+    refetchInterval: 3600000, // TLEs are stable for hours, refresh every hour
+    staleTime: 1800000,
+  });
+}
+
