@@ -29,6 +29,7 @@ import AssistantChat from "../components/AssistantChat";
 import CustomCursor from "../components/CustomCursor";
 import TelemetryGaugeOverlay from "../components/TelemetryGaugeOverlay";
 import ConjunctionNetworkModal from "../components/ConjunctionNetworkModal";
+import TrajectoryDivergenceView from "../components/TrajectoryDivergenceView";
 import { Satellite, ConjunctionEvent, ManeuverPlan } from "@/types";
 import { supabase } from "@/lib/supabase";
 import { useOrbitalStore } from "../store/useOrbitalStore";
@@ -209,6 +210,7 @@ export default function Home() {
   const [evasionPlan, setEvasionPlan] = useState<ManeuverPlan | null>(null);
   const [isNetworkModalOpen, setIsNetworkModalOpen] = useState(false);
   const [wsStatus, setWsStatus] = useState<string>("SYNCING");
+  const [isTrajectoryMode, setIsTrajectoryMode] = useState(false);
 
   // React Query Hooks
   const { data: qSatellites } = useActiveSatellites();
@@ -434,6 +436,7 @@ export default function Home() {
 
     setConjunctions([newAlert, ...conjunctions]);
     setSelectedConjunction(newAlert);
+    setIsTrajectoryMode(true); // Open the trajectory divergence view on simulate
   };
 
   const filteredConjunctions = conjunctions.filter(c => {
@@ -454,6 +457,19 @@ export default function Home() {
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#050505] text-zinc-100 font-sans text-[12px] select-none cursor-none">
       <CustomCursor />
+
+      {/* TRAJECTORY DIVERGENCE VIEW — full screen overlay */}
+      {isTrajectoryMode && selectedConjunction && (
+        <TrajectoryDivergenceView
+          conjunction={selectedConjunction}
+          evasionPlan={evasionPlan}
+          onManeuverExecute={(plan) => {
+            setEvasionPlan(plan);
+          }}
+          onClose={() => setIsTrajectoryMode(false)}
+        />
+      )}
+
       <img 
         src="/logo.png" 
         alt="Tyvora Logo" 
@@ -956,6 +972,12 @@ export default function Home() {
                             className="px-3 py-1 bg-zinc-800/80 hover:bg-zinc-750 text-zinc-200 font-bold uppercase tracking-wider rounded border border-zinc-700/60 transition-all text-[9px]"
                           >
                             {isBottomDeckOpen ? "Minimize HUD ▼" : "Expand Trend & Diagnostics ▲"}
+                          </button>
+                          <button
+                            onClick={() => setIsTrajectoryMode(true)}
+                            className="px-3 py-1 bg-[#00ffcc]/10 hover:bg-[#00ffcc]/20 text-[#00ffcc] font-bold uppercase tracking-wider rounded border border-[#00ffcc]/40 transition-all text-[9px] shadow-[0_0_8px_rgba(0,255,204,0.15)]"
+                          >
+                            ⊕ TRAJECTORY VIEW
                           </button>
                         </div>
                       </div>
