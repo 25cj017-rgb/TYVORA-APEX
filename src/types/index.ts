@@ -18,9 +18,9 @@ export interface ConjunctionEvent {
   missDistance: number; // meters
   collisionProbability: number; // probability value e.g. 1 in 10,000 (0.0001)
   severity: "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
-  radialMiss?: number;
-  inTrackMiss?: number;
-  crossTrackMiss?: number;
+  radialMiss: number;
+  inTrackMiss: number;
+  crossTrackMiss: number;
 }
 
 export interface TelemetryState {

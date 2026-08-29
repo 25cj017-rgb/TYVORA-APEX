@@ -27,8 +27,12 @@ import {
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip } from "recharts";
 import AssistantChat from "../components/AssistantChat";
 import CustomCursor from "../components/CustomCursor";
+import TelemetryGaugeOverlay from "../components/TelemetryGaugeOverlay";
+import ConjunctionNetworkModal from "../components/ConjunctionNetworkModal";
 import { Satellite, ConjunctionEvent, ManeuverPlan } from "@/types";
 import { supabase } from "@/lib/supabase";
+import { useOrbitalStore } from "../store/useOrbitalStore";
+import { useActiveSatellites, useConjunctionAlerts, useTelemetryStream } from "../hooks/useSpaceQueries";
 
 // Dynamically import SpaceGlobe to bypass server-side window errors
 const SpaceGlobe = dynamic(() => import("../components/SpaceGlobe"), {
@@ -164,7 +168,7 @@ const enableFullscreen = () => {
       });
     }
   } catch (e) {
-    console.error("Fullscreen error:", e);
+    console.warn("Fullscreen notice:", e);
   }
 };
 
@@ -179,11 +183,21 @@ export default function Home() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [sessionUser, setSessionUser] = useState<string>("GUEST");
   
-  // Dashboard states
-  const [conjunctions, setConjunctions] = useState(INITIAL_CONJUNCTION_EVENTS);
-  const [selectedConjunction, setSelectedConjunction] = useState(INITIAL_CONJUNCTION_EVENTS[0]);
-  const [activeSatellites, setActiveSatellites] = useState(INITIAL_SATELLITES);
-  const [selectedSatellite, setSelectedSatellite] = useState(INITIAL_SATELLITES[0]);
+  // Zustand store properties
+  const {
+    activeSatellites,
+    selectedSatellite,
+    conjunctions,
+    selectedConjunction,
+    showAllOrbits,
+    setActiveSatellites,
+    setSelectedSatellite,
+    setConjunctions,
+    setSelectedConjunction,
+    setShowAllOrbits,
+  } = useOrbitalStore();
+
+  // Local dashboard states
   const [currentTime, setCurrentTime] = useState("");
   const [alertFilter, setAlertFilter] = useState("ALL");
   const [isSimulating, setIsSimulating] = useState(true);
@@ -191,7 +205,50 @@ export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(false);
   const [isRightPanelOpen, setIsRightPanelOpen] = useState(false);
+  const [isBottomDeckOpen, setIsBottomDeckOpen] = useState(false);
   const [evasionPlan, setEvasionPlan] = useState<ManeuverPlan | null>(null);
+  const [isNetworkModalOpen, setIsNetworkModalOpen] = useState(false);
+  const [wsStatus, setWsStatus] = useState<string>("SYNCING");
+
+  // React Query Hooks
+  const { data: qSatellites } = useActiveSatellites();
+  const { data: qConjunctions } = useConjunctionAlerts(qSatellites);
+  const { data: qTelemetry } = useTelemetryStream(qSatellites);
+
+  // Sync React Query data to Zustand store
+  useEffect(() => {
+    if (qSatellites && qSatellites.length > 0) {
+      setActiveSatellites(qSatellites);
+      if (!selectedSatellite) {
+        setSelectedSatellite(qSatellites[0]);
+      }
+    }
+  }, [qSatellites, selectedSatellite, setActiveSatellites, setSelectedSatellite]);
+
+  useEffect(() => {
+    if (qConjunctions && qConjunctions.length > 0) {
+      setConjunctions(qConjunctions);
+      if (!selectedConjunction) {
+        setSelectedConjunction(qConjunctions[0]);
+      }
+    }
+  }, [qConjunctions, selectedConjunction, setConjunctions, setSelectedConjunction]);
+
+  // Sync selected satellite and reset evasion plan when selected conjunction changes
+  useEffect(() => {
+    setEvasionPlan(null);
+    if (selectedConjunction && activeSatellites.length > 0) {
+      const match = activeSatellites.find(
+        (s) => s.name.toLowerCase().includes(selectedConjunction.primaryObject.toLowerCase()) ||
+               selectedConjunction.primaryObject.toLowerCase().includes(s.name.toLowerCase())
+      );
+      if (match) {
+        setSelectedSatellite(match);
+      }
+    }
+  }, [selectedConjunction, activeSatellites, setSelectedSatellite]);
+
+
   
   // High-performance parallax (bypasses React state to prevent re-renders)
   const mouseX = useMotionValue(0);
@@ -220,17 +277,7 @@ export default function Home() {
   useEffect(() => {
     if (stage !== "dashboard") return;
 
-    // 1. Initial Load of current satellites
-    const fetchSatellites = async () => {
-      const { data, error } = await supabase.from('satellites').select('*');
-      if (data && !error && data.length > 0) {
-        setActiveSatellites(data as Satellite[]);
-        setSelectedSatellite((prev: Satellite) => data.find(s => s.norad_id === prev.norad_id) || data[0]);
-      }
-    };
-    fetchSatellites();
-
-    // 2. Realtime Subscription
+    // Realtime Subscription
     const channel = supabase.channel('schema-db-changes')
       .on(
         'postgres_changes',
@@ -243,23 +290,30 @@ export default function Home() {
           console.log("Realtime payload received!", payload);
           if (payload.eventType === 'UPDATE' || payload.eventType === 'INSERT') {
             const newSat = payload.new as Satellite;
-            setActiveSatellites((prev: Satellite[]) => {
-              const exists = prev.find(s => s.norad_id === newSat.norad_id);
-              if (exists) {
-                return prev.map(s => s.norad_id === newSat.norad_id ? newSat : s);
-              }
-              return [...prev, newSat];
-            });
-            setSelectedSatellite((prev: Satellite) => prev.norad_id === newSat.norad_id ? newSat : prev);
+            const currentSats = useOrbitalStore.getState().activeSatellites;
+            const exists = currentSats.find(s => s.norad_id === newSat.norad_id);
+            const nextSats = exists
+              ? currentSats.map(s => s.norad_id === newSat.norad_id ? newSat : s)
+              : [...currentSats, newSat];
+            setActiveSatellites(nextSats);
+            
+            const currentSelected = useOrbitalStore.getState().selectedSatellite;
+            if (currentSelected?.norad_id === newSat.norad_id) {
+              setSelectedSatellite(newSat);
+            }
           }
         }
-      )
-      .subscribe();
+      );
+
+    channel.subscribe((status) => {
+      console.log("Supabase Realtime subscription status changed:", status);
+      setWsStatus(status === "SUBSCRIBED" ? "LIVE" : status === "CLOSED" || status === "TIMED_OUT" ? "OFFLINE" : "SYNCING");
+    });
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [stage]);
+  }, [stage, setActiveSatellites, setSelectedSatellite]);
 
   // Automatic fullscreen trigger on landing page first interaction
   useEffect(() => {
@@ -304,12 +358,7 @@ export default function Home() {
     if (stage !== "dashboard" || !isSimulating) return;
 
     const interval = setInterval(() => {
-      setSelectedConjunction(prev => {
-        const delta = (Math.random() - 0.5) * 4;
-        const newMiss = Math.max(10, Math.round(prev.missDistance + delta));
-        return { ...prev, missDistance: newMiss };
-      });
-      setTelemetryPing(Math.floor(Math.random() * 40) + 60);
+      setTelemetryPing(Math.floor(Math.random() * 15) + 12);
     }, 3000);
 
     return () => clearInterval(interval);
@@ -382,7 +431,7 @@ export default function Home() {
       crossTrackMiss: parseFloat((Math.random() * 200 + 40).toFixed(1)),
     };
 
-    setConjunctions(prev => [newAlert, ...prev]);
+    setConjunctions([newAlert, ...conjunctions]);
     setSelectedConjunction(newAlert);
   };
 
@@ -391,7 +440,7 @@ export default function Home() {
     return c.severity === alertFilter;
   });
 
-  const trendData = [
+  const trendData = selectedConjunction ? [
     { name: "-60m", prob: selectedConjunction.collisionProbability * 0.88 },
     { name: "-50m", prob: selectedConjunction.collisionProbability * 0.94 },
     { name: "-40m", prob: selectedConjunction.collisionProbability * 0.91 },
@@ -399,11 +448,17 @@ export default function Home() {
     { name: "-20m", prob: selectedConjunction.collisionProbability * 1.02 },
     { name: "-10m", prob: selectedConjunction.collisionProbability * 0.98 },
     { name: "TCA", prob: selectedConjunction.collisionProbability }
-  ];
+  ] : [];
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-[#050505] text-zinc-100 font-sans text-[12px] select-none cursor-none">
       <CustomCursor />
+      <img 
+        src="/logo.png" 
+        alt="Tyvora Logo" 
+        className={`absolute top-6 right-8 w-32 md:w-48 z-[100] object-contain hover:scale-105 hover:-rotate-1 transition-all duration-1000 cursor-none ${stage === 'dashboard' ? 'opacity-0 pointer-events-none translate-y-[-10px]' : 'opacity-90 hover:opacity-100'}`} 
+        style={{ mixBlendMode: 'screen', filter: 'contrast(2.5) brightness(0.6) grayscale(100%)' }} 
+      />
       
       {/* IMMERSIVE LANDING & LOGIN Backdrops */}
       <AnimatePresence>
@@ -585,92 +640,118 @@ export default function Home() {
         {stage === "dashboard" && mounted && (
           <motion.div 
             key="dashboard"
-            initial={{ opacity: 0, scale: 0.98, y: 15 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            transition={{ duration: 1.2, ease: "easeOut", staggerChildren: 0.1 }}
-            className="w-full h-full flex overflow-hidden z-10"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.8 }}
+            className="w-full h-full flex flex-col overflow-hidden z-10 bg-[#050505]"
           >
-            
-            <main className="flex-1 flex flex-col h-full overflow-hidden p-3 gap-3">
-              
-              {/* TOP STATUS BAR */}
-              <header className="flex items-center justify-between py-1.5 font-mono">
-                <div className="flex items-center gap-4">
-                  <span className="font-bold tracking-widest text-zinc-100 flex items-center gap-2 font-orbitron">
-                    <span className="w-1.5 h-1.5 bg-zinc-500 rounded-full" />
-                    TYVORA // MISSION CONTROL INTERFACE
-                  </span>
-                  <span className="text-zinc-600">|</span>
-                  <span className="text-[#00ffcc] font-bold">AUTH: {sessionUser}</span>
-                  <span className="text-zinc-600">|</span>
-                  <span className="text-zinc-400">EPOCH: <span className="text-zinc-200">{currentTime}</span></span>
+            {/* SLEEK TOP NAVIGATION BAR */}
+            <header className="h-13 px-6 bg-zinc-950/90 border-b border-zinc-800/80 backdrop-blur-xl flex items-center justify-between z-40 shrink-0 font-mono">
+              <div className="flex items-center gap-4">
+                <span className="font-extrabold text-sm tracking-[0.22em] text-zinc-100 flex items-center gap-2.5 font-orbitron">
+                  <span className="w-2 h-2 bg-[#00ffcc] rounded-full shadow-[0_0_10px_#00ffcc]" />
+                  TYVORA // APEX
+                </span>
+                <span className="h-4 w-px bg-zinc-800" />
+                <span className="text-[10px] tracking-wider text-zinc-400 font-sans uppercase">MISSION CONTROL INTERFACE</span>
+                <span className="h-4 w-px bg-zinc-800" />
+                <span className="px-2 py-0.5 rounded text-[9px] font-bold tracking-widest bg-[#00ffcc]/10 text-[#00ffcc] border border-[#00ffcc]/30">
+                  AUTH: {sessionUser}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-5 text-[10px] text-zinc-400">
+                <div className="flex items-center gap-2 bg-zinc-900/60 px-2.5 py-1 rounded-md border border-zinc-800/60">
+                  <Clock size={12} className="text-zinc-500" />
+                  <span>EPOCH: <strong className="text-zinc-200">{currentTime}</strong></span>
                 </div>
 
-                <div className="flex items-center gap-6 text-[10px] text-zinc-400">
-                  <div className="flex items-center gap-1.5">TELEMETRY LATENCY: <span className="text-zinc-200 font-bold">{telemetryPing}ms</span><span className="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-pulse" /></div>
-                  <div>TLE PROPAGATION ERROR (RMS): <span className="text-zinc-200 font-bold">0.024 km</span></div>
-                  <div>COVARIANCE MATRIX INTEGRITY: <span className="text-zinc-200 font-bold">99.98%</span></div>
-                  <div>ODTK BATCH FILTER: <span className="text-zinc-200 font-bold">NOMINAL</span></div>
+                <div className="flex items-center gap-3 text-[10px]">
+                  <div className="flex items-center gap-1.5">
+                    <span className={`w-1.5 h-1.5 rounded-full ${wsStatus === "LIVE" ? "bg-[#00ffcc] shadow-[0_0_8px_#00ffcc]" : wsStatus === "OFFLINE" ? "bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.8)]" : "bg-amber-400 animate-pulse"}`} />
+                    <span>LINK: <strong className="text-zinc-200 uppercase">{wsStatus}</strong></span>
+                  </div>
+                  <span className="text-zinc-700">•</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-[#00ffcc] animate-pulse" />
+                    <span>LATENCY: <strong className="text-zinc-200">{telemetryPing}ms</strong></span>
+                  </div>
+                  <span className="text-zinc-700">•</span>
+                  <div>ODTK: <strong className="text-[#00ffcc]">NOMINAL</strong></div>
+                </div>
+
+                <div className="flex items-center gap-2 pl-2 border-l border-zinc-800/80">
+                  <button 
+                    onClick={() => setIsNetworkModalOpen(true)}
+                    className="flex items-center gap-1.5 px-2.5 py-1 bg-[#00ffcc]/10 hover:bg-[#00ffcc]/20 border border-[#00ffcc]/40 text-[#00ffcc] uppercase font-bold text-[9px] tracking-wider rounded transition-all font-orbitron shadow-[0_0_12px_rgba(0,255,204,0.15)]"
+                  >
+                    <Activity size={12} />
+                    TOPOLOGY MATRIX
+                  </button>
                   <button 
                     onClick={triggerAlert}
-                    className="px-2 py-0.5 border border-zinc-700 hover:border-zinc-500 bg-zinc-850 hover:bg-zinc-800 text-zinc-200 uppercase font-semibold text-[9px] rounded cursor-pointer transition-colors"
+                    className="flex items-center gap-1.5 px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700/80 text-zinc-200 uppercase font-bold text-[9px] tracking-wider rounded transition-all"
                   >
-                    Simulate Threat Ingest
+                    <ShieldAlert size={12} className="text-amber-400" />
+                    SIMULATE THREAT
                   </button>
                 </div>
-              </header>
+              </div>
+            </header>
 
-              {/* WORKSPACE MATRIX */}
-              <section className="flex-1 flex gap-3 overflow-hidden relative">
-                
-                {/* PRIMARY COLUMN */}
-                <AnimatePresence>
-                  {isLeftPanelOpen && (
-                    <motion.div 
-                      initial={{ width: 0, opacity: 0 }} 
-                      animate={{ width: "25%", opacity: 1 }} 
-                      exit={{ width: 0, opacity: 0 }}
-                      className="h-full flex-shrink-0 overflow-hidden"
-                    >
-                      <div className="w-full min-w-[280px] h-full flex flex-col gap-6 pr-2">
-                  
-                  <div className="grid grid-cols-2 gap-4 py-2">
-                    <div className="space-y-0.5">
-                      <span className="text-[9px] text-zinc-500 uppercase block">Space-Track API Sync</span>
-                      <span className="font-mono text-zinc-200 flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 bg-zinc-400 rounded-full inline-block animate-pulse" />
-                        STANDBY / ACTIVE
-                      </span>
+            {/* HERO CENTER WORKSPACE (FULL BLEED 3D WITH FLOATING HUDS) */}
+            <div className="flex-1 flex overflow-hidden relative">
+              
+              {/* LEFT DRAWER // RISK MATRIX PANEL */}
+              <AnimatePresence>
+                {isLeftPanelOpen && (
+                  <motion.aside 
+                    initial={{ width: 0, opacity: 0, x: -20 }}
+                    animate={{ width: 350, opacity: 1, x: 0 }}
+                    exit={{ width: 0, opacity: 0, x: -20 }}
+                    transition={{ duration: 0.35, ease: "easeInOut" }}
+                    className="h-full bg-zinc-950/95 border-r border-zinc-800/80 backdrop-blur-2xl z-30 flex flex-col shrink-0 shadow-2xl overflow-hidden font-mono text-[10px]"
+                  >
+                    <div className="p-4 border-b border-zinc-850 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                        <span className="font-bold text-zinc-200 uppercase tracking-wider font-orbitron text-[11px]">
+                          RISK CORRELATION MATRIX
+                        </span>
+                      </div>
+                      <button 
+                        onClick={() => setIsLeftPanelOpen(false)}
+                        className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-850 transition-colors"
+                      >
+                        <ChevronLeft size={14} />
+                      </button>
                     </div>
-                    <div className="space-y-0.5 pl-1.5">
-                      <span className="text-[9px] text-zinc-500 uppercase block">SGP4 Steps / hr</span>
-                      <span className="font-mono text-zinc-200 font-bold">1,440/hr</span>
-                    </div>
-                    <div className="space-y-0.5">
-                      <span className="text-[9px] text-zinc-500 uppercase block">Orbit Determination</span>
-                      <span className="font-mono text-zinc-200">12.8ms</span>
-                    </div>
-                    <div className="space-y-0.5">
-                      <span className="text-[9px] text-zinc-500 uppercase block">Conjunction Count</span>
-                      <span className="font-mono text-zinc-200 font-bold">{conjunctions.length} Active Vectors</span>
-                    </div>
-                  </div>
 
-                  <div className="flex-1 flex flex-col overflow-hidden">
-                    <div className="flex items-center justify-between pb-3 mb-2 border-b border-zinc-900">
-                      <span className="font-bold font-sans tracking-wider text-zinc-400 uppercase text-[10px]">
-                        Close-Approach Risk Matrix
-                      </span>
-                      
+                    <div className="p-4 grid grid-cols-2 gap-3 bg-zinc-900/30 border-b border-zinc-850">
+                      <div>
+                        <span className="text-[8px] text-zinc-500 uppercase block">Space-Track Sync</span>
+                        <span className="text-zinc-200 font-bold flex items-center gap-1 mt-0.5">
+                          <span className="w-1.5 h-1.5 bg-[#00ffcc] rounded-full inline-block animate-pulse" />
+                          ACTIVE / NOMINAL
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-[8px] text-zinc-500 uppercase block">Active Conjunctions</span>
+                        <span className="text-zinc-200 font-bold mt-0.5 block">{conjunctions.length} Tracked Vectors</span>
+                      </div>
+                    </div>
+
+                    <div className="p-3 flex items-center justify-between border-b border-zinc-900">
+                      <span className="text-[9px] text-zinc-500 uppercase tracking-widest font-sans">Filter Severity</span>
                       <div className="flex gap-1">
                         {["ALL", "CRITICAL", "HIGH", "MEDIUM"].map((lvl) => (
                           <button
                             key={lvl}
                             onClick={() => setAlertFilter(lvl)}
-                            className={`px-1.5 py-0.5 rounded text-[8px] font-mono border transition-all ${
+                            className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase transition-all ${
                               alertFilter === lvl 
-                                ? "bg-zinc-200 text-zinc-950 border-zinc-300 font-bold" 
-                                : "bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200"
+                                ? "bg-zinc-100 text-zinc-950 shadow-sm" 
+                                : "bg-zinc-900 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800"
                             }`}
                           >
                             {lvl}
@@ -679,276 +760,357 @@ export default function Home() {
                       </div>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto">
-                      <table className="w-full text-left font-mono text-[10px] border-collapse">
-                        <thead>
-                          <tr className="text-zinc-500 border-b border-zinc-900">
-                            <th className="py-2 pr-2 font-normal font-sans uppercase text-[9px] tracking-widest">EVENT ID</th>
-                            <th className="py-2 px-2 font-normal font-sans uppercase text-[9px] tracking-widest">PRIMARY</th>
-                            <th className="py-2 px-2 font-normal font-sans uppercase text-[9px] tracking-widest">HAZARD OBJECT</th>
-                            <th className="py-2 px-2 text-right font-normal font-sans uppercase text-[9px] tracking-widest">MISS</th>
-                            <th className="py-2 pl-2 text-right font-normal font-sans uppercase text-[9px] tracking-widest">SEV</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-zinc-900/50">
-                          {filteredConjunctions.length > 0 ? (
-                            filteredConjunctions.map((e) => {
-                              const isSelected = selectedConjunction.id === e.id;
-                              return (
-                                <tr 
-                                  key={e.id}
-                                  onClick={() => setSelectedConjunction(e)}
-                                  className={`hover:bg-zinc-900/40 cursor-pointer transition-colors ${
-                                    isSelected ? "bg-zinc-900 text-zinc-100 font-bold" : "text-zinc-400"
-                                  }`}
-                                >
-                                  <td className="py-2 pr-2 text-zinc-200">{e.id}</td>
-                                  <td className="p-2 truncate max-w-[80px] text-zinc-300">{e.primaryObject}</td>
-                                  <td className="p-2 truncate max-w-[90px] text-zinc-300">{e.secondaryObject}</td>
-                                  <td className="p-2 text-right font-bold text-zinc-100">{e.missDistance}m</td>
-                                  <td className="py-2 pl-2 text-right">
-                                    <span className={`px-1.5 py-0.5 text-[8px] font-bold tracking-widest uppercase ${
-                                      e.severity === "CRITICAL" 
-                                        ? "text-[#ef4444] border border-[#ef4444] animate-pulse" 
-                                        : e.severity === "HIGH"
-                                        ? "text-amber-500 border border-amber-900"
-                                        : e.severity === "MEDIUM"
-                                        ? "text-zinc-400"
-                                        : "text-zinc-500"
-                                    }`}>
-                                      {e.severity}
-                                    </span>
-                                  </td>
-                                </tr>
-                              );
-                            })
-                          ) : (
-                            <tr>
-                              <td colSpan={5} className="text-center py-8 text-zinc-600 font-mono">
-                                NO ACTIVE TRACKS MATCHING CORRELATION FILTER.
-                              </td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
+                    <div className="flex-1 overflow-y-auto p-2">
+                      <div className="space-y-1.5">
+                        {filteredConjunctions.length > 0 ? (
+                          filteredConjunctions.map((e) => {
+                            const isSelected = selectedConjunction?.id === e.id;
+                            return (
+                              <div
+                                key={e.id}
+                                onClick={() => setSelectedConjunction(e)}
+                                className={`p-3 rounded-lg border cursor-pointer transition-all ${
+                                  isSelected
+                                    ? "bg-zinc-900/90 border-[#00ffcc]/60 shadow-[0_0_15px_rgba(0,255,204,0.1)] text-zinc-100"
+                                    : "bg-zinc-900/30 border-zinc-850 text-zinc-400 hover:bg-zinc-900/60 hover:border-zinc-700"
+                                }`}
+                              >
+                                <div className="flex items-center justify-between mb-1.5">
+                                  <span className="font-bold text-xs tracking-wider font-orbitron text-zinc-200">{e.id}</span>
+                                  <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold tracking-widest uppercase ${
+                                    e.severity === "CRITICAL"
+                                      ? "bg-red-500/10 text-red-400 border border-red-500/30 animate-pulse"
+                                      : e.severity === "HIGH"
+                                      ? "bg-amber-500/10 text-amber-400 border border-amber-500/30"
+                                      : "bg-zinc-800 text-zinc-300"
+                                  }`}>
+                                    {e.severity}
+                                  </span>
+                                </div>
+
+                                <div className="space-y-1 text-[9px]">
+                                  <div className="flex justify-between">
+                                    <span className="text-zinc-500">PRIMARY:</span>
+                                    <span className="text-zinc-200 font-semibold">{e.primaryObject}</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span className="text-zinc-500">HAZARD:</span>
+                                    <span className="text-red-400">{e.secondaryObject}</span>
+                                  </div>
+                                  <div className="flex justify-between pt-1 border-t border-zinc-800/50 mt-1">
+                                    <span className="text-zinc-500">MISS DISTANCE:</span>
+                                    <span className="font-bold text-[#00ffcc] text-[10px]">{e.missDistance}m</span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          <div className="text-center py-12 text-zinc-600 font-mono text-xs">
+                            NO CONJUNCTIONS MATCH FILTER
+                          </div>
+                        )}
+                      </div>
                     </div>
+                  </motion.aside>
+                )}
+              </AnimatePresence>
+
+              {/* MAIN 3D GLOBE KERNEL */}
+              <div className="flex-1 h-full relative overflow-hidden bg-black">
+                
+                {/* 1. TOP-LEFT FLOATING COMMAND TOOLBAR */}
+                <div className="absolute top-4 left-4 z-20 pointer-events-auto flex items-center gap-3">
+                  <div className="bg-zinc-950/85 border border-zinc-800/80 backdrop-blur-xl px-3.5 py-2 rounded-xl shadow-2xl flex items-center gap-4 text-[10px] font-mono">
+                    
+                    {!isLeftPanelOpen && (
+                      <button
+                        onClick={() => setIsLeftPanelOpen(true)}
+                        className="flex items-center gap-1.5 px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 rounded border border-zinc-700/80 transition-all font-bold uppercase tracking-wider"
+                      >
+                        <ChevronRight size={12} className="text-[#00ffcc]" />
+                        RISK MATRIX ({conjunctions.length})
+                      </button>
+                    )}
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] text-zinc-500 uppercase tracking-wider font-sans">PROPAGATION TARGET:</span>
+                      <select
+                        value={selectedSatellite?.norad_id || ""}
+                        onChange={(e) => {
+                          const sat = activeSatellites.find(s => s.norad_id === parseInt(e.target.value, 10));
+                          if (sat) setSelectedSatellite(sat);
+                        }}
+                        className="bg-zinc-900 border border-zinc-750 text-xs text-zinc-200 font-mono rounded px-2.5 py-1 focus:outline-none focus:border-[#00ffcc] cursor-pointer"
+                      >
+                        {activeSatellites.map((sat) => (
+                          <option key={sat.norad_id} value={sat.norad_id}>
+                            {sat.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="h-4 w-px bg-zinc-800" />
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] text-zinc-500 uppercase tracking-wider font-sans">TICK RATE:</span>
+                      <button 
+                        onClick={() => setIsSimulating(!isSimulating)}
+                        className={`px-2.5 py-1 rounded font-mono text-[9px] font-bold tracking-widest uppercase transition-all border ${
+                          isSimulating 
+                            ? "bg-[#00ffcc]/15 text-[#00ffcc] border-[#00ffcc]/40 shadow-[0_0_8px_rgba(0,255,204,0.2)]" 
+                            : "bg-zinc-900 text-zinc-400 border-zinc-800"
+                        }`}
+                      >
+                        {isSimulating ? "LIVE" : "PAUSED"}
+                      </button>
+                    </div>
+
+                    <div className="h-4 w-px bg-zinc-800" />
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-[9px] text-zinc-500 uppercase tracking-wider font-sans">ORBIT PATHS:</span>
+                      <button 
+                        onClick={() => setShowAllOrbits(!showAllOrbits)}
+                        className={`px-2.5 py-1 rounded font-mono text-[9px] font-bold tracking-widest uppercase transition-all border ${
+                          showAllOrbits 
+                            ? "bg-[#00ffcc]/15 text-[#00ffcc] border-[#00ffcc]/40 shadow-[0_0_8px_rgba(0,255,204,0.2)]" 
+                            : "bg-zinc-900 text-zinc-400 border-zinc-800"
+                        }`}
+                      >
+                        {showAllOrbits ? "SHOW ALL" : "TARGET ONLY"}
+                      </button>
+                    </div>
+
+                    {!isRightPanelOpen && (
+                      <button
+                        onClick={() => setIsRightPanelOpen(true)}
+                        className="flex items-center gap-1.5 px-2.5 py-1 bg-zinc-900 hover:bg-zinc-800 text-zinc-200 rounded border border-zinc-700/80 transition-all font-bold uppercase tracking-wider"
+                      >
+                        <Cpu size={12} className="text-[#00ffcc]" />
+                        ADVISORY AI
+                        <ChevronLeft size={12} />
+                      </button>
+                    )}
+
                   </div>
+                </div>
 
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                {/* 2. TOP-RIGHT FLOATING TELEMETRY GAUGE */}
+                <div className="absolute top-4 right-4 z-20 pointer-events-auto">
+                  <TelemetryGaugeOverlay velocity={selectedSatellite?.norad_id === 25544 ? 7.66 : 7.5} altitude={selectedSatellite?.norad_id === 25544 ? 420.5 : 500} latency={telemetryPing} />
+                </div>
 
-                {/* SECONDARY & TERTIARY SECTION */}
-                <motion.div className="flex-1 flex flex-col gap-6 h-full overflow-hidden px-2 relative min-w-0">
-                  
-                  {/* Left Toggle Button */}
-                  <button 
-                    onClick={() => setIsLeftPanelOpen(!isLeftPanelOpen)} 
-                    className="absolute left-0 top-1/2 -translate-y-1/2 z-30 p-1 bg-zinc-950 border border-zinc-700 border-l-0 rounded-r text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900 transition-all cursor-pointer shadow-lg"
-                  >
-                     <ChevronRight size={14} className={isLeftPanelOpen ? "rotate-180 transition-transform" : "transition-transform"} />
-                  </button>
+                {/* 3. CENTER CESIUM GLOBE */}
+                {selectedSatellite ? (
+                  <SpaceGlobe 
+                    satellites={activeSatellites}
+                    selectedSatellite={selectedSatellite} 
+                    onSatelliteSelect={setSelectedSatellite}
+                    isLandingMode={false}
+                    evasionPlan={evasionPlan}
+                  />
+                ) : (
+                  <div className="flex-1 h-full flex items-center justify-center font-mono text-zinc-500 bg-zinc-950">
+                    LOADING 3D VECTOR GLOBE CORE...
+                  </div>
+                )}
 
-                  {/* Right Toggle Button */}
-                  <button 
-                    onClick={() => setIsRightPanelOpen(!isRightPanelOpen)} 
-                    className="absolute right-0 top-1/2 -translate-y-1/2 z-30 p-1 bg-zinc-950 border border-zinc-700 border-r-0 rounded-l text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900 transition-all cursor-pointer shadow-lg"
-                  >
-                     <ChevronLeft size={14} className={isRightPanelOpen ? "rotate-180 transition-transform" : "transition-transform"} />
-                  </button>
-                  
-                  <div className="flex-1 flex flex-col overflow-hidden min-h-[380px]">
-                    <div className="flex items-center justify-between pb-3 mb-2 border-b border-zinc-900">
-                      <div className="flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 bg-zinc-300 rounded-full" />
-                        <span className="font-bold font-sans text-[10px] uppercase text-zinc-400 tracking-wider">
-                          SGP4 Telemetry Orbital Vector Grid (3D)
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[9px] text-zinc-500 font-mono">PROPAGATION CORRELATION:</span>
-                          <select
-                            value={selectedSatellite.norad_id}
-                            onChange={(e) => {
-                              const sat = activeSatellites.find(s => s.norad_id === parseInt(e.target.value, 10));
-                              if (sat) setSelectedSatellite(sat);
-                            }}
-                            className="bg-zinc-950 border border-zinc-800 text-[9px] text-zinc-300 font-mono rounded px-2 py-0.5 focus:outline-none cursor-pointer hover:border-zinc-700"
-                          >
-                            {activeSatellites.map((sat) => (
-                              <option key={sat.norad_id} value={sat.norad_id}>
-                                {sat.name}
-                              </option>
-                            ))}
-                          </select>
+                {/* 4. BOTTOM FLOATING CONJUNCTION & TREND HUD DECK */}
+                {selectedConjunction && (
+                  <div className="absolute bottom-4 left-4 right-4 z-20 pointer-events-auto max-w-5xl mx-auto">
+                    <motion.div 
+                      layout
+                      className="bg-zinc-950/90 border border-zinc-800/90 backdrop-blur-2xl rounded-2xl shadow-2xl overflow-hidden font-mono text-[10px]"
+                    >
+                      {/* Compact Deck Header */}
+                      <div className="px-4 py-2.5 bg-zinc-900/60 border-b border-zinc-800/60 flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                          <span className="flex items-center gap-2 font-bold font-orbitron tracking-wider text-xs text-zinc-200">
+                            <span className={`w-2.5 h-2.5 rounded-full ${selectedConjunction.severity === "CRITICAL" ? "bg-red-500 animate-pulse" : "bg-amber-400"}`} />
+                            TARGET VECTOR // {selectedConjunction.id}
+                          </span>
+                          <span className="h-3 w-px bg-zinc-800" />
+                          <span className="text-zinc-400">
+                            Primary: <strong className="text-zinc-100">{selectedConjunction.primaryObject}</strong>
+                          </span>
+                          <span className="text-zinc-600">vs</span>
+                          <span className="text-red-400 font-semibold">{selectedConjunction.secondaryObject}</span>
                         </div>
-                        
-                        <div className="flex items-center gap-2">
-                          <span className="text-[9px] text-zinc-500 font-mono">TICK RATE:</span>
-                          <button 
-                            onClick={() => setIsSimulating(!isSimulating)}
-                            className={`px-1.5 py-0.5 rounded font-mono text-[9px] font-bold border ${
-                              isSimulating ? "bg-zinc-850 text-zinc-200 border-zinc-700" : "bg-zinc-900 text-zinc-500 border-zinc-800"
-                            }`}
+
+                        <div className="flex items-center gap-6">
+                          <div className="flex items-center gap-2">
+                            <span className="text-zinc-500 uppercase font-sans text-[9px]">Calculated Miss:</span>
+                            <span className="text-[#00ffcc] font-extrabold text-sm tracking-tight">{selectedConjunction.missDistance}m</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-zinc-500 uppercase font-sans text-[9px]">Collision Prob:</span>
+                            <span className="text-red-400 font-bold text-sm">{(selectedConjunction.collisionProbability * 100).toFixed(4)}%</span>
+                          </div>
+                          <button
+                            onClick={() => setIsBottomDeckOpen(!isBottomDeckOpen)}
+                            className="px-3 py-1 bg-zinc-800/80 hover:bg-zinc-750 text-zinc-200 font-bold uppercase tracking-wider rounded border border-zinc-700/60 transition-all text-[9px]"
                           >
-                            {isSimulating ? "LIVE" : "PAUSED"}
+                            {isBottomDeckOpen ? "Minimize HUD ▼" : "Expand Trend & Diagnostics ▲"}
                           </button>
                         </div>
                       </div>
-                    </div>
 
-                    <div className="flex-1 relative bg-black/40">
-                      <SpaceGlobe 
-                        satellites={activeSatellites}
-                        selectedSatellite={selectedSatellite} 
-                        onSatelliteSelect={setSelectedSatellite}
-                        isLandingMode={false}
-                        evasionPlan={evasionPlan}
-                      />
-                    </div>
-                  </div>
+                      {/* Expanded 2-Column Metrics & Trend Graph */}
+                      <AnimatePresence>
+                        {isBottomDeckOpen && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.3, ease: "easeInOut" }}
+                            className="p-4 grid grid-cols-1 md:grid-cols-2 gap-6"
+                          >
+                            {/* Left Column: Precise Axis Vectors */}
+                            <div className="space-y-2.5 pr-4 border-r border-zinc-850">
+                              <div className="flex items-center justify-between pb-1.5 border-b border-zinc-900 text-[9px] uppercase font-sans tracking-widest text-zinc-400 font-bold">
+                                <span>Close-Approach Vector Diagnostics</span>
+                                <span className="text-[#00ffcc] font-mono">TCA: {selectedConjunction.tca}</span>
+                              </div>
 
-                  <div className="grid grid-cols-2 gap-6 h-[190px]">
-                    
-                    {/* ACTIVE CONJUNCTION DETAIL */}
-                    <div className="flex flex-col justify-between font-mono pr-2">
-                      <div className="pb-2 mb-2 flex items-center justify-between">
-                        <span className="font-bold text-[10px] font-sans tracking-widest text-zinc-400 uppercase">Vector Target // {selectedConjunction.id}</span>
-                        <span className={`text-[9px] font-bold tracking-widest uppercase ${
-                          selectedConjunction.severity === "CRITICAL"
-                            ? "text-red-500 animate-pulse"
-                            : "text-zinc-400"
-                        }`}>
-                          {selectedConjunction.severity}
-                        </span>
-                      </div>
+                              <div className="grid grid-cols-2 gap-3 pt-1">
+                                <div className="bg-zinc-900/40 p-2.5 rounded border border-zinc-850">
+                                  <span className="text-[8px] text-zinc-500 uppercase block font-sans">RADIAL MISS VECTOR</span>
+                                  <span className="text-zinc-100 font-bold text-xs">{selectedConjunction.radialMiss}m</span>
+                                </div>
+                                <div className="bg-zinc-900/40 p-2.5 rounded border border-zinc-850">
+                                  <span className="text-[8px] text-zinc-500 uppercase block font-sans">IN-TRACK MISS</span>
+                                  <span className="text-zinc-100 font-bold text-xs">{selectedConjunction.inTrackMiss}m</span>
+                                </div>
+                                <div className="bg-zinc-900/40 p-2.5 rounded border border-zinc-850">
+                                  <span className="text-[8px] text-zinc-500 uppercase block font-sans">CROSS-TRACK MISS</span>
+                                  <span className="text-zinc-100 font-bold text-xs">{selectedConjunction.crossTrackMiss}m</span>
+                                </div>
+                                <div className="bg-zinc-900/40 p-2.5 rounded border border-zinc-850 flex flex-col justify-center">
+                                  <span className="text-[8px] text-zinc-500 uppercase block font-sans">SEVERITY STATUS</span>
+                                  <span className="text-red-400 font-extrabold uppercase text-xs animate-pulse">{selectedConjunction.severity} HAZARD</span>
+                                </div>
+                              </div>
+                            </div>
 
-                      <div className="space-y-1.5 text-[10px] text-zinc-400">
-                        <div className="flex justify-between">
-                          <span className="text-zinc-500">PRIMARY CORRELATION:</span>
-                          <span className="text-zinc-100 font-bold">{selectedConjunction.primaryObject}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-zinc-500">SECONDARY HAZARD:</span>
-                          <span className="text-red-400">{selectedConjunction.secondaryObject}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-zinc-500">TCA POINT (UTC):</span>
-                          <span className="text-zinc-200">{selectedConjunction.tca}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-zinc-500">RADIAL MISS VECTOR:</span>
-                          <span className="text-zinc-200">{selectedConjunction.radialMiss}m</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-zinc-500">IN-TRACK / CROSS MISS:</span>
-                          <span className="text-zinc-200">{selectedConjunction.inTrackMiss}m / {selectedConjunction.crossTrackMiss}m</span>
-                        </div>
-                      </div>
+                            {/* Right Column: Collision Probability Line Graph */}
+                            <div className="flex flex-col justify-between pl-2">
+                              <div className="flex items-center justify-between pb-1 text-[9px] uppercase font-sans tracking-widest text-zinc-400 font-bold">
+                                <span>TCA - 60m Probability Evolution</span>
+                                <span className="text-zinc-500 font-mono">ODTK COVARIANCE: 99.98%</span>
+                              </div>
 
-                      <div className="pt-2 mt-2 flex justify-between items-center text-[11px]">
-                        <span className="text-zinc-500 font-sans uppercase text-[9px] tracking-widest">Calculated Miss:</span>
-                        <span className="text-zinc-100 font-bold text-base tracking-tight">{selectedConjunction.missDistance}m</span>
-                      </div>
-                    </div>
-
-                    {/* PROBABILITY TREND GRAPH */}
-                    <div className="flex flex-col justify-between font-mono pl-2">
-                      <div className="pb-2 mb-1 flex items-center justify-between">
-                        <span className="font-bold text-[10px] font-sans tracking-widest text-zinc-400 uppercase">Collision Probability Trend</span>
-                        <span className={`font-bold ${selectedConjunction.severity === "CRITICAL" ? "text-red-500" : "text-zinc-200"}`}>
-                          {(selectedConjunction.collisionProbability * 100).toFixed(5)}%
-                        </span>
-                      </div>
-
-                      <div className="flex-1 w-full min-h-[90px] flex items-center justify-center relative mt-1">
-                        {mounted ? (
-                          <ResponsiveContainer width="100%" height={90}>
-                            <LineChart data={trendData} margin={{ top: 10, right: 15, left: -25, bottom: 0 }}>
-                              <XAxis 
-                                dataKey="name" 
-                                stroke="#3f3f46" 
-                                fontSize={8} 
-                                tickLine={false} 
-                              />
-                              <YAxis 
-                                stroke="#3f3f46" 
-                                fontSize={8} 
-                                tickLine={false}
-                                tickFormatter={(v) => v.toFixed(4)}
-                              />
-                              <Tooltip
-                                contentStyle={{ backgroundColor: "#09090b", borderColor: "#27272a", fontSize: "9px", fontFamily: "monospace" }}
-                                itemStyle={{ color: "#ef4444" }}
-                                labelStyle={{ color: "#71717a" }}
-                              />
-                              <Line 
-                                type="monotone" 
-                                dataKey="prob" 
-                                stroke={selectedConjunction.severity === "CRITICAL" ? "#ef4444" : "#71717a"} 
-                                strokeWidth={1.5} 
-                                dot={{ r: 2, strokeWidth: 1 }}
-                                activeDot={{ r: 4 }}
-                              />
-                            </LineChart>
-                          </ResponsiveContainer>
-                        ) : (
-                          <div className="text-[9px] text-zinc-500">LOAD TRANSIENT WAVEFORM...</div>
+                              <div className="h-[95px] w-full pt-2">
+                                {mounted ? (
+                                  <ResponsiveContainer width="100%" height={95}>
+                                    <LineChart data={trendData} margin={{ top: 5, right: 10, left: -25, bottom: 0 }}>
+                                      <XAxis 
+                                        dataKey="name" 
+                                        stroke="#52525b" 
+                                        fontSize={9} 
+                                        tickLine={false} 
+                                      />
+                                      <YAxis 
+                                        stroke="#52525b" 
+                                        fontSize={9} 
+                                        tickLine={false}
+                                        tickFormatter={(v) => v.toFixed(4)}
+                                      />
+                                      <Tooltip
+                                        contentStyle={{ backgroundColor: "#09090b", borderColor: "#27272a", fontSize: "10px", fontFamily: "monospace", borderRadius: "8px" }}
+                                        itemStyle={{ color: "#ef4444" }}
+                                        labelStyle={{ color: "#a1a1aa" }}
+                                      />
+                                      <Line 
+                                        type="monotone" 
+                                        dataKey="prob" 
+                                        stroke={selectedConjunction.severity === "CRITICAL" ? "#ef4444" : "#00ffcc"} 
+                                        strokeWidth={2} 
+                                        dot={{ r: 3, strokeWidth: 1, fill: "#050505" }}
+                                        activeDot={{ r: 5, fill: "#ef4444" }}
+                                      />
+                                    </LineChart>
+                                  </ResponsiveContainer>
+                                ) : (
+                                  <div className="text-[9px] text-zinc-500 flex items-center justify-center h-full">WAVEFORM LOAD...</div>
+                                )}
+                              </div>
+                            </div>
+                          </motion.div>
                         )}
-                      </div>
+                      </AnimatePresence>
+                    </motion.div>
+                  </div>
+                )}
 
-                      <div className="flex justify-between items-center text-[8px] text-zinc-500 pt-1 border-t border-zinc-900/50 mt-1">
-                        <span>RESOLVED CONJUNCTION RESOLUTION:</span>
-                        <span className="text-zinc-400">1:144,000 PROP VECTOR STEP</span>
+              </div>
+
+              {/* RIGHT DRAWER // ADVISORY AI ASSISTANT PANEL */}
+              <AnimatePresence>
+                {isRightPanelOpen && (
+                  <motion.aside 
+                    initial={{ width: 0, opacity: 0, x: 20 }}
+                    animate={{ width: 380, opacity: 1, x: 0 }}
+                    exit={{ width: 0, opacity: 0, x: 20 }}
+                    transition={{ duration: 0.35, ease: "easeInOut" }}
+                    className="h-full bg-zinc-950/95 border-l border-zinc-800/80 backdrop-blur-2xl z-30 flex flex-col shrink-0 shadow-2xl overflow-hidden"
+                  >
+                    <div className="p-3.5 border-b border-zinc-850 flex items-center justify-between font-mono text-[10px]">
+                      <div className="flex items-center gap-2">
+                        <Cpu size={14} className="text-[#00ffcc]" />
+                        <span className="font-bold text-zinc-200 tracking-wider uppercase font-orbitron">
+                          ADVISORY UNIT // AI RAG
+                        </span>
                       </div>
+                      <button 
+                        onClick={() => setIsRightPanelOpen(false)}
+                        className="p-1 rounded text-zinc-400 hover:text-white hover:bg-zinc-850 transition-colors"
+                      >
+                        <ChevronRight size={14} />
+                      </button>
                     </div>
 
-                  </div>
-
-                </motion.div>
-
-                {/* TERTIARY COLUMN - AI INSIGHT ASSISTANT */}
-                <AnimatePresence>
-                  {isRightPanelOpen && (
-                    <motion.div 
-                      initial={{ width: 0, opacity: 0 }} 
-                      animate={{ width: "25%", opacity: 1 }} 
-                      exit={{ width: 0, opacity: 0 }}
-                      className="h-full flex-shrink-0 overflow-hidden"
-                    >
-                      <div className="w-full min-w-[280px] h-full flex flex-col gap-3 pl-2">
+                    <div className="flex-1 overflow-hidden p-3">
+                      {selectedConjunction && (
                         <AssistantChat 
                           key={selectedConjunction.id} 
                           selectedConjunction={selectedConjunction} 
                           onManeuverExecute={setEvasionPlan}
                         />
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+                      )}
+                    </div>
+                  </motion.aside>
+                )}
+              </AnimatePresence>
 
-              </section>
-              
-              {/* SYSTEM HEALTH TICKER */}
-              <footer className="pt-2 flex items-center justify-between border-t border-zinc-900 font-mono text-[9px] text-zinc-500 uppercase tracking-widest mt-2">
-                <div className="flex gap-6">
-                  <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 bg-[#00ffcc] rounded-full animate-pulse" /> SGP4 KERNEL: ACTIVE</div>
-                  <div className="flex items-center gap-1.5"><span className="w-1.5 h-1.5 bg-[#00ffcc] rounded-full" /> API STATUS: NOMINAL</div>
-                  <div className="flex items-center gap-1.5">FPS: <span className="text-zinc-200 font-bold">60.0</span></div>
-                  <div className="flex items-center gap-1.5">LATENCY: <span className="text-[#00ffcc] font-bold">{telemetryPing}ms</span></div>
+            </div>
+
+            {/* SLEEK FOOTER STATUS TICKER */}
+            <footer className="h-7 px-6 bg-zinc-950 border-t border-zinc-900/80 flex items-center justify-between font-mono text-[9px] text-zinc-500 uppercase tracking-widest shrink-0 z-40">
+              <div className="flex items-center gap-6">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 bg-[#00ffcc] rounded-full animate-pulse" />
+                  <span className="text-zinc-300 font-semibold">SGP4 KERNEL: ACTIVE</span>
                 </div>
-                <div className="text-zinc-600">TYVORA AEROSPACE DEFENSE © 2026</div>
-              </footer>
-
-            </main>
+                <div className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 bg-[#00ffcc] rounded-full" />
+                  <span className="text-zinc-300 font-semibold">API: NOMINAL</span>
+                </div>
+                <div>FPS: <strong className="text-zinc-200">60.0</strong></div>
+                <div>LATENCY: <strong className="text-[#00ffcc]">{telemetryPing}ms</strong></div>
+              </div>
+              <div className="text-zinc-600 font-sans tracking-normal text-[10px]">
+                TYVORA AEROSPACE DEFENSE © 2026 // AIR-GAPPED COMMAND PROTOCOL
+              </div>
+            </footer>
 
           </motion.div>
         )}
 
       </AnimatePresence>
 
+      <ConjunctionNetworkModal isOpen={isNetworkModalOpen} onClose={() => setIsNetworkModalOpen(false)} />
     </div>
   );
 }

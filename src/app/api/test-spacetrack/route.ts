@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchSatelliteTLE } from "../../../services/spaceTrackService";
+import { fetchSatelliteTLEs } from "../../../services/spaceTrackService";
 
 /**
  * Test Route Handler: GET /api/test-spacetrack
@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
     console.log(`[Test Route] Initiating TLE extraction sequence for NORAD ID: ${noradId}`);
     
     // Trigger the ingestion function
-    await fetchSatelliteTLE(noradId);
+    await fetchSatelliteTLEs([noradId]);
 
     return NextResponse.json({
       success: true,

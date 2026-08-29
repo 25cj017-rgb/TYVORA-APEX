@@ -9,7 +9,7 @@ export interface RiskAnalysisResult {
   probability: number;
   mahalanobisDistance: number;
   missDistanceKm: number;
-  severity: "LOW" | "ELEVATED" | "CRITICAL";
+  severity: "LOW" | "HIGH" | "CRITICAL";
   positionA: { x: number; y: number; z: number };
   positionB: { x: number; y: number; z: number };
 }
@@ -81,11 +81,11 @@ export function calculateCollisionRisk(
 
   // 7. Define severity classifications based on analytical bounds
   // LOW: < 0.001% (1e-5), ELEVATED: 0.001% to 0.05% (5e-4), CRITICAL: > 0.05%
-  let severity: "LOW" | "ELEVATED" | "CRITICAL" = "LOW";
+  let severity: "LOW" | "HIGH" | "CRITICAL" = "LOW";
   if (probability > 0.0005) {
     severity = "CRITICAL";
   } else if (probability > 0.00001) {
-    severity = "ELEVATED";
+    severity = "HIGH";
   }
 
   return {
@@ -103,7 +103,7 @@ export interface ExplanationPayload {
   satBName: string;
   missDistanceKm: number;
   probability: number;
-  severity: "LOW" | "ELEVATED" | "CRITICAL";
+  severity: "LOW" | "HIGH" | "CRITICAL";
 }
 
 /**

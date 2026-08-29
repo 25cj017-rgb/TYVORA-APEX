@@ -1,5 +1,8 @@
-
 import { Satellite } from "@/types";
+
+// Module-level cache variables to persist session cookies across serverless runs/fetches
+let cachedCookieHeader: string | null = null;
+let cacheExpiration: number = 0; // Epoch timestamp in ms
 
 /**
  * Fetches Two-Line Element (TLE) orbital data for multiple satellites from the Space-Track API.
@@ -30,37 +33,48 @@ export async function fetchSatelliteTLEs(norad_ids: number[]): Promise<Partial<S
   const queryUrl = `https://www.space-track.org/basicspacedata/query/class/gp/norad_cat_id/${idString}/format/json`;
 
   try {
-    console.log(`[Space-Track] Initiating bulk TLE fetch for NORAD IDs: ${idString}...`);
+    const now = Date.now();
+    let cookieHeader = cachedCookieHeader;
 
-    // 1. Authenticate with Space-Track API to establish a session
-    const authResponse = await fetch(loginUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: `identity=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
-    });
+    if (!cookieHeader || now > cacheExpiration) {
+      console.log(`[Space-Track] Cookie expired or absent. Initiating new login session for NORAD IDs: ${idString}...`);
 
-    if (!authResponse.ok) {
-      throw new Error(`Authentication request failed with status: ${authResponse.status}`);
+      // 1. Authenticate with Space-Track API to establish a session
+      const authResponse = await fetch(loginUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: `identity=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
+      });
+
+      if (!authResponse.ok) {
+        throw new Error(`Authentication request failed with status: ${authResponse.status}`);
+      }
+
+      console.log(`[Space-Track] Auth POST status: ${authResponse.status} ${authResponse.statusText}`);
+      const authText = await authResponse.clone().text();
+      
+      // Check if Space-Track returned a successful authentication payload
+      if (authText.includes('"Login":"Failed"')) {
+        throw new Error("Space-Track login failed. Please check your SPACE_TRACK_USER and SPACE_TRACK_PASS in your .env.local file.");
+      }
+
+      // Capture cookie headers safely using modern getSetCookie() to handle multi-cookie response arrays
+      const rawCookies = authResponse.headers.getSetCookie();
+      if (!rawCookies || rawCookies.length === 0) {
+        throw new Error("No session cookies returned from Space-Track. Please check your credentials.");
+      }
+
+      // Format the cookie headers as a semicolon-separated string for the Cookie request header
+      cookieHeader = rawCookies.map(cookie => cookie.split(";")[0]).join("; ");
+      
+      // Cache session cookie for 15 minutes (900000ms)
+      cachedCookieHeader = cookieHeader;
+      cacheExpiration = now + 15 * 60 * 1000;
+    } else {
+      console.log(`[Space-Track] Reusing cached session cookie (avoids login rate limits) for NORAD IDs: ${idString}`);
     }
-
-    console.log(`[Space-Track] Auth POST status: ${authResponse.status} ${authResponse.statusText}`);
-    const authText = await authResponse.clone().text();
-    
-    // Check if Space-Track returned a successful authentication payload
-    if (authText.includes('"Login":"Failed"')) {
-      throw new Error("Space-Track login failed. Please check your SPACE_TRACK_USER and SPACE_TRACK_PASS in your .env.local file.");
-    }
-
-    // Capture cookie headers safely using modern getSetCookie() to handle multi-cookie response arrays
-    const rawCookies = authResponse.headers.getSetCookie();
-    if (!rawCookies || rawCookies.length === 0) {
-      throw new Error("No session cookies returned from Space-Track. Please check your credentials.");
-    }
-
-    // Format the cookie headers as a semicolon-separated string for the Cookie request header
-    const cookieHeader = rawCookies.map(cookie => cookie.split(";")[0]).join("; ");
 
     // 2. Query TLE data from Space-Track catalog using the session cookie
     const response = await fetch(queryUrl, {
@@ -70,6 +84,20 @@ export async function fetchSatelliteTLEs(norad_ids: number[]): Promise<Partial<S
         "Accept": "application/json",
       },
     });
+
+    // Check if session is expired on Space-Track server side (can redirect to login page returning HTML)
+    const contentType = response.headers.get("content-type") || "";
+    if (
+      response.status === 401 || 
+      response.status === 403 || 
+      (response.status === 200 && contentType.includes("text/html"))
+    ) {
+      console.warn("[Space-Track] Session cookie rejected or expired on server. Invaliding cache and retrying...");
+      cachedCookieHeader = null;
+      cacheExpiration = 0;
+      // Recursive retry once
+      return fetchSatelliteTLEs(norad_ids);
+    }
 
     if (!response.ok) {
       throw new Error(`Data query request failed with status: ${response.status}`);

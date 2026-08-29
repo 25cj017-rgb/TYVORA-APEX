@@ -6,6 +6,7 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import * as satellite from "satellite.js";
 import { Satellite, ManeuverPlan } from "@/types";
+import { useOrbitalStore } from "../store/useOrbitalStore";
 
 // Make TypeScript aware of the global Cesium object loaded via CDN
 declare global {
@@ -54,6 +55,7 @@ export default function SpaceGlobe({
   evasionPlan
 }: SpaceGlobeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const showAllOrbits = useOrbitalStore(state => state.showAllOrbits);
   const [cesiumLoaded, setCesiumLoaded] = useState(false);
   const [loadingError, setLoadingError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -61,6 +63,9 @@ export default function SpaceGlobe({
   const entityRefs = useRef<any[]>([]);
   const landingHandlerRef = useRef<CesiumEventHandler | null>(null);
   const interactionHandlerRef = useRef<CesiumEventHandler | null>(null);
+  const spinHandlerRef = useRef<CesiumEventHandler | null>(null);
+  const isInteractingRef = useRef<boolean>(false);
+  const prevEvasionPlanRef = useRef<ManeuverPlan | null>(null);
 
   // 1. Asynchronously load CesiumJS Scripts and Stylesheets
   useEffect(() => {
@@ -119,23 +124,19 @@ export default function SpaceGlobe({
 
     let active = true;
 
-    // Loading State: 2 second timeout check for network/token issues
+    // Loading State: 15 second non-blocking check for network/token issues
     const loadTimeout = setTimeout(() => {
       if (!viewerRef.current) {
-        console.error("Cesium Viewer initialization timeout (2s). Check network connectivity or Cesium Ion Token.");
+        console.warn("Cesium Viewer initialization continuing in background...");
       }
-    }, 2000);
+    }, 15000);
 
     const initCesium = async () => {
       try {
-        // Pre-flight network check to Ion Server
-        try {
-          const preFlight = await fetch('https://api.cesium.com/', { method: 'HEAD', mode: 'no-cors' });
-        } catch (netErr) {
-          console.warn("Pre-flight check to api.cesium.com failed:", netErr);
-          setLoadingError("System Offline / Reconnecting to Ion network...");
-          return;
-        }
+        // Pre-flight network check non-blocking
+        fetch('https://api.cesium.com/', { method: 'HEAD', mode: 'no-cors' }).catch((netErr) => {
+          console.warn("Pre-flight check to api.cesium.com notice:", netErr);
+        });
 
         // Ion Token Injection: explicitly set defaultAccessToken. Replace with real token.
         const token = process.env.NEXT_PUBLIC_CESIUM_ION_TOKEN || 'YOUR_CESIUM_ION_TOKEN_HERE';
@@ -164,10 +165,14 @@ export default function SpaceGlobe({
 
         // Optimization: Ensure the Viewer instance configuration is cached
         const viewer = new Cesium.Viewer('cesiumContainer', {
+          animation: false,
           baseLayerPicker: false,
+          fullscreenButton: false,
           geocoder: false,
           homeButton: false,
+          infoBox: false,
           sceneModePicker: false,
+          selectionIndicator: false,
           timeline: false,
           navigationHelpButton: false,
           baseLayer: false, // Disables default Ion Bing Maps to prevent token failure issues
@@ -202,7 +207,7 @@ export default function SpaceGlobe({
         // Synchronize accurate sun position lighting based on current UTC time
         const nowJulian = Cesium.JulianDate.fromDate(new Date());
         viewer.clock.currentTime = nowJulian;
-        viewer.clock.multiplier = 1.0;
+        viewer.clock.multiplier = 10.0; // 10x real-time speed so orbital motion is dynamic and clearly visible
         viewer.clock.shouldAnimate = true;
 
         // Removed the MODIS Terra TrueColor weather overlay because it causes a washed-out, 
@@ -251,6 +256,26 @@ export default function SpaceGlobe({
           landingHandlerRef.current = handler;
         }
 
+        // Cinematic Auto-Rotation: Orbit the camera smoothly around Earth when idle at high altitude
+        const spinHandler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+        spinHandler.setInputAction(() => { isInteractingRef.current = true; }, Cesium.ScreenSpaceEventType.LEFT_DOWN);
+        spinHandler.setInputAction(() => { isInteractingRef.current = false; }, Cesium.ScreenSpaceEventType.LEFT_UP);
+        spinHandler.setInputAction(() => { isInteractingRef.current = true; }, Cesium.ScreenSpaceEventType.RIGHT_DOWN);
+        spinHandler.setInputAction(() => { isInteractingRef.current = false; }, Cesium.ScreenSpaceEventType.RIGHT_UP);
+        spinHandler.setInputAction(() => { isInteractingRef.current = true; }, Cesium.ScreenSpaceEventType.MIDDLE_DOWN);
+        spinHandler.setInputAction(() => { isInteractingRef.current = false; }, Cesium.ScreenSpaceEventType.MIDDLE_UP);
+        spinHandlerRef.current = spinHandler;
+
+        viewer.clock.onTick.addEventListener(() => {
+          if (viewer && !viewer.isDestroyed() && !isInteractingRef.current) {
+            const height = viewer.camera.positionCartographic.height;
+            // Only rotate when zoomed out (> 1,500 km) so detailed satellite inspections stay rock steady
+            if (height > 1500000) {
+              viewer.scene.camera.rotate(Cesium.Cartesian3.UNIT_Z, -0.0004);
+            }
+          }
+        });
+
         viewerRef.current = viewer;
         setIsLoading(false); // Clear loading state once successfully instantiated
 
@@ -260,7 +285,9 @@ export default function SpaceGlobe({
             window.dispatchEvent(new Event('resize'));
           }
         });
-        resizeObserver.observe(containerRef.current);
+        if (containerRef.current) {
+          resizeObserver.observe(containerRef.current);
+        }
         viewer._resizeObserver = resizeObserver;
 
       } catch (err) {
@@ -281,6 +308,10 @@ export default function SpaceGlobe({
       if (interactionHandlerRef.current) {
         interactionHandlerRef.current.destroy();
         interactionHandlerRef.current = null;
+      }
+      if (spinHandlerRef.current) {
+        spinHandlerRef.current.destroy();
+        spinHandlerRef.current = null;
       }
       if (viewerRef.current) {
         if (viewerRef.current._resizeObserver) {
@@ -312,150 +343,185 @@ export default function SpaceGlobe({
         const { tle_line1, tle_line2, name, norad_id } = sat;
         const satrec = satellite.twoline2satrec(tle_line1, tle_line2);
 
-        const positions: any[] = [];
-        
-        // Propagate orbit forward for a full cycle
-        for (let i = 0; i <= 100; i++) {
-          const time = new Date(now.getTime() + i * 60000);
-          const positionAndVelocity = satellite.propagate(satrec, time);
-          const positionEci = positionAndVelocity ? positionAndVelocity.position : null;
+        const isSelected = selectedSatellite && selectedSatellite.norad_id === norad_id;
 
-          if (positionEci && typeof positionEci !== "boolean") {
-            const gmst = satellite.gstime(time);
-            const positionGd = satellite.eciToGeodetic(positionEci, gmst);
-            const longitude = satellite.degreesLong(positionGd.longitude);
-            const latitude = satellite.degreesLat(positionGd.latitude);
-            const height = positionGd.height * 1000;
-            positions.push(Cesium.Cartesian3.fromDegrees(longitude, latitude, height));
-          }
-        }
+        // Propagate orbit forward for a full cycle only if showing all or selected
+        if (showAllOrbits || isSelected) {
+          const positions: any[] = [];
+          for (let i = 0; i <= 100; i++) {
+            const time = new Date(now.getTime() + i * 60000);
+            const positionAndVelocity = satellite.propagate(satrec, time);
+            const positionEci = positionAndVelocity ? positionAndVelocity.position : null;
 
-        if (positions.length > 0) {
-          // Unique translucent orbital path trace line for each object
-          const hue = (index * 50) % 360;
-          const isSelected = selectedSatellite && selectedSatellite.norad_id === norad_id;
-          const orbitColor = isSelected 
-            ? Cesium.Color.WHITE 
-            : Cesium.Color.fromHsl(hue / 360, 0.6, 0.5, 0.35); // Translucent unique path
-
-          const orbitPath = viewer.entities.add({
-            name: `${name} Orbit Path`,
-            polyline: {
-              positions: positions,
-              width: isSelected ? 2.5 : 1.5,
-              material: new Cesium.PolylineGlowMaterialProperty({
-                glowPower: isSelected ? 0.25 : 0.1,
-                color: orbitColor,
-              }),
-            },
-          });
-          entityRefs.current.push(orbitPath);
-
-          // Phase 5: Render the 3D Evasion Simulator Path if a burn plan is authorized
-          if (isSelected && evasionPlan) {
-            const evasionPositions: any[] = [];
-            for (let i = 0; i <= 100; i++) {
-              const time = new Date(now.getTime() + i * 60000);
-              const positionAndVelocity = satellite.propagate(satrec, time);
-              const positionEci = positionAndVelocity ? positionAndVelocity.position : null;
-              
-              if (positionEci && typeof positionEci !== "boolean") {
-                const gmst = satellite.gstime(time);
-                const positionGd = satellite.eciToGeodetic(positionEci, gmst);
-                const longitude = satellite.degreesLong(positionGd.longitude);
-                const latitude = satellite.degreesLat(positionGd.latitude);
-                let height = positionGd.height * 1000;
-                
-                // Exaggerate the projected miss distance visually for the dashboard operator
-                const visualExaggeration = 50; 
-                const divergence = Math.sin((i / 100) * Math.PI) * (evasionPlan.projectedMissDistanceKm * 1000 * visualExaggeration);
-                
-                if (evasionPlan.burnDirection === "PROGRADE") {
-                  height += divergence;
-                } else {
-                  height -= divergence;
-                }
-
-                evasionPositions.push(Cesium.Cartesian3.fromDegrees(longitude, latitude, height));
-              }
+            if (positionEci && typeof positionEci !== "boolean") {
+              const gmst = satellite.gstime(time);
+              const positionGd = satellite.eciToGeodetic(positionEci, gmst);
+              const longitude = satellite.degreesLong(positionGd.longitude);
+              const latitude = satellite.degreesLat(positionGd.latitude);
+              const height = positionGd.height * 1000;
+              positions.push(Cesium.Cartesian3.fromDegrees(longitude, latitude, height));
             }
+          }
 
-            const evasionArc = viewer.entities.add({
-              name: `${name} Evasion Path`,
+          if (positions.length > 0) {
+            // Unique translucent orbital path trace line for each object
+            const hue = (index * 50) % 360;
+            const orbitColor = isSelected 
+              ? Cesium.Color.WHITE 
+              : Cesium.Color.fromHsl(hue / 360, 0.6, 0.5, 0.35); // Translucent unique path
+
+            const orbitPath = viewer.entities.add({
+              name: `${name} Orbit Path`,
               polyline: {
-                positions: evasionPositions,
-                width: 3.5,
-                material: new Cesium.PolylineDashMaterialProperty({
-                  color: Cesium.Color.fromCssColorString("#00ffcc"),
-                  dashLength: 25.0,
+                positions: positions,
+                width: isSelected ? 2.5 : 1.5,
+                material: new Cesium.PolylineGlowMaterialProperty({
+                  glowPower: isSelected ? 0.25 : 0.1,
+                  color: orbitColor,
                 }),
               },
             });
-            entityRefs.current.push(evasionArc);
+            entityRefs.current.push(orbitPath);
+          }
+        }
+
+        // Phase 5: Render the 3D Evasion Simulator Path if a burn plan is authorized
+        if (isSelected && evasionPlan) {
+          const evasionPositions: any[] = [];
+          for (let i = 0; i <= 100; i++) {
+            const time = new Date(now.getTime() + i * 60000);
+            const positionAndVelocity = satellite.propagate(satrec, time);
+            const positionEci = positionAndVelocity ? positionAndVelocity.position : null;
+            
+            if (positionEci && typeof positionEci !== "boolean") {
+              const gmst = satellite.gstime(time);
+              const positionGd = satellite.eciToGeodetic(positionEci, gmst);
+              const longitude = satellite.degreesLong(positionGd.longitude);
+              const latitude = satellite.degreesLat(positionGd.latitude);
+              let height = positionGd.height * 1000;
+              
+              // Exaggerate the projected miss distance visually for the dashboard operator
+              const visualExaggeration = 50; 
+              const divergence = Math.sin((i / 100) * Math.PI) * (evasionPlan.projectedMissDistanceKm * 1000 * visualExaggeration);
+              
+              if (evasionPlan.burnDirection === "PROGRADE") {
+                height += divergence;
+              } else {
+                height -= divergence;
+              }
+
+              evasionPositions.push(Cesium.Cartesian3.fromDegrees(longitude, latitude, height));
+            }
           }
 
-          const currentPosAndVel = satellite.propagate(satrec, now);
-          const currentEci = currentPosAndVel ? currentPosAndVel.position : null;
-          if (currentEci && typeof currentEci !== "boolean") {
-            const gmst = satellite.gstime(now);
-            const currentGd = satellite.eciToGeodetic(currentEci, gmst);
-            const currentLong = satellite.degreesLong(currentGd.longitude);
-            const currentLat = satellite.degreesLat(currentGd.latitude);
-            const currentAlt = currentGd.height * 1000;
+          const evasionArc = viewer.entities.add({
+            name: `${name} Evasion Path`,
+            polyline: {
+              positions: evasionPositions,
+              width: 3.5,
+              material: new Cesium.PolylineDashMaterialProperty({
+                color: Cesium.Color.fromCssColorString("#00ffcc"),
+                dashLength: 25.0,
+              }),
+            },
+          });
+          entityRefs.current.push(evasionArc);
+        }
 
-            const currentCartesian = Cesium.Cartesian3.fromDegrees(currentLong, currentLat, currentAlt);
+        // Real-time dynamic sampling property for continuous live orbital motion
+        const positionProperty = new Cesium.SampledPositionProperty();
+        const nowMs = now.getTime();
+        for (let i = -15; i <= 105; i += 1) {
+          const sampleTime = new Date(nowMs + i * 60000);
+          const posAndVel = satellite.propagate(satrec, sampleTime);
+          const posEci = posAndVel ? posAndVel.position : null;
+          if (posEci && typeof posEci !== "boolean") {
+            const gmst = satellite.gstime(sampleTime);
+            const posGd = satellite.eciToGeodetic(posEci, gmst);
+            const lon = satellite.degreesLong(posGd.longitude);
+            const lat = satellite.degreesLat(posGd.latitude);
+            const alt = posGd.height * 1000;
+            const cartesian = Cesium.Cartesian3.fromDegrees(lon, lat, alt);
+            const julianTime = Cesium.JulianDate.fromDate(sampleTime);
+            positionProperty.addSample(julianTime, cartesian);
+          }
+        }
 
-            // Detailed photorealistic 3D glTF/GLB model (with tactical fallback point)
-            const satEntity = viewer.entities.add({
-              id: `sat-${norad_id}`, // Used for picking interaction
-              position: currentCartesian,
-              point: {
-                pixelSize: isSelected ? 12 : 8,
-                color: isSelected ? Cesium.Color.WHITE : Cesium.Color.fromCssColorString("#a1a1aa"),
-                outlineColor: Cesium.Color.BLACK,
-                outlineWidth: 2,
+        if (Cesium.LagrangePolynomialApproximation) {
+          positionProperty.setInterpolationOptions({
+            interpolationDegree: 5,
+            interpolationAlgorithm: Cesium.LagrangePolynomialApproximation,
+          });
+        }
+        if (Cesium.ExtrapolationType) {
+          positionProperty.forwardExtrapolationType = Cesium.ExtrapolationType.HOLD;
+          positionProperty.backwardExtrapolationType = Cesium.ExtrapolationType.HOLD;
+        }
+
+        const currentPosAndVel = satellite.propagate(satrec, now);
+        const currentEci = currentPosAndVel ? currentPosAndVel.position : null;
+        if (currentEci && typeof currentEci !== "boolean") {
+          const gmst = satellite.gstime(now);
+          const currentGd = satellite.eciToGeodetic(currentEci, gmst);
+          const currentLong = satellite.degreesLong(currentGd.longitude);
+          const currentLat = satellite.degreesLat(currentGd.latitude);
+          const currentAlt = currentGd.height * 1000;
+
+          // Vector-grade glowing marker & data URI icon (eliminates 404 errors completely)
+          const satEntity = viewer.entities.add({
+            id: `sat-${norad_id}`, // Used for picking interaction
+            position: positionProperty,
+            point: {
+              pixelSize: isSelected ? 14 : 9,
+              color: isSelected ? Cesium.Color.WHITE : Cesium.Color.fromCssColorString("#00ffcc"),
+              outlineColor: Cesium.Color.BLACK,
+              outlineWidth: 2,
+            },
+            billboard: {
+              image: `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${isSelected ? 'white' : '%2300ffcc'}" width="32" height="32"><circle cx="12" cy="12" r="4"/><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>`,
+              width: isSelected ? 26 : 18,
+              height: isSelected ? 26 : 18,
+              verticalOrigin: Cesium.VerticalOrigin.CENTER,
+            },
+            label: {
+              text: name,
+              font: isSelected ? "bold 13px Inter, monospace" : "10px Inter, monospace",
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              fillColor: isSelected ? Cesium.Color.WHITE : Cesium.Color.fromCssColorString("#a1a1aa"),
+              outlineColor: Cesium.Color.BLACK,
+              outlineWidth: 4,
+              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+              pixelOffset: new Cesium.Cartesian2(0, -22),
+              showBackground: true,
+              backgroundColor: new Cesium.Color(0.05, 0.05, 0.05, 0.8),
+            },
+          });
+          entityRefs.current.push(satEntity);
+
+          // FlyTo the selected satellite smoothly ONLY when a new evasion burn plan is authorized
+          const isNewEvasionPlan = evasionPlan && (
+            !prevEvasionPlanRef.current || 
+            prevEvasionPlanRef.current.deltaV_m_s !== evasionPlan.deltaV_m_s || 
+            prevEvasionPlanRef.current.burnDirection !== evasionPlan.burnDirection
+          );
+          if (isSelected && isNewEvasionPlan) {
+            viewer.camera.flyTo({
+              destination: Cesium.Cartesian3.fromDegrees(currentLong, currentLat - 12.0, currentAlt + 6000000.0),
+              orientation: {
+                heading: Cesium.Math.toRadians(0.0),
+                pitch: Cesium.Math.toRadians(-40.0),
+                roll: 0.0,
               },
-              model: {
-                uri: "/models/satellite.glb", // Base requirement for local model
-                minimumPixelSize: 64,
-                maximumScale: 20000,
-                color: isSelected ? Cesium.Color.WHITE : Cesium.Color.LIGHTGRAY,
-                colorBlendMode: Cesium.ColorBlendMode.MIX,
-                colorBlendAmount: isSelected ? 0.0 : 0.4,
-              },
-              label: {
-                text: name,
-                font: isSelected ? "bold 13px Inter, sans-serif" : "10px Inter, sans-serif",
-                style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-                fillColor: isSelected ? Cesium.Color.WHITE : Cesium.Color.fromCssColorString("#a1a1aa"),
-                outlineColor: Cesium.Color.BLACK,
-                outlineWidth: 4,
-                verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                pixelOffset: new Cesium.Cartesian2(0, -35),
-                showBackground: false,
-              },
+              duration: 2.5,
             });
-            entityRefs.current.push(satEntity);
-
-            // FlyTo the selected satellite smoothly
-            if (isSelected) {
-              viewer.camera.flyTo({
-                destination: Cesium.Cartesian3.fromDegrees(currentLong, currentLat - 12.0, currentAlt + 6000000.0),
-                orientation: {
-                  heading: Cesium.Math.toRadians(0.0),
-                  pitch: Cesium.Math.toRadians(-40.0),
-                  roll: 0.0,
-                },
-                duration: 2.5,
-              });
-            }
           }
         }
       });
+      prevEvasionPlanRef.current = evasionPlan;
     } catch (err) {
       console.error("Error drawing multi-satellite fleet on 3D globe:", err);
     }
-  }, [satellites, selectedSatellite, evasionPlan, cesiumLoaded, isLandingMode]);
+  }, [satellites, selectedSatellite, evasionPlan, cesiumLoaded, isLandingMode, showAllOrbits]);
 
   // 4. Click interaction logic for picking 3D Satellite Models
   useEffect(() => {
@@ -467,16 +533,18 @@ export default function SpaceGlobe({
       interactionHandlerRef.current = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
     }
 
-    interactionHandlerRef.current.setInputAction((movement: any) => {
-      const pickedObject = viewer.scene.pick(movement.position);
-      if (Cesium.defined(pickedObject) && pickedObject.id && typeof pickedObject.id.id === "string" && pickedObject.id.id.startsWith("sat-")) {
-        const norad_id = parseInt(pickedObject.id.id.replace("sat-", ""), 10);
-        const sat = satellites?.find(s => s.norad_id === norad_id);
-        if (sat) {
-          onSatelliteSelect(sat);
+    if (interactionHandlerRef.current) {
+      interactionHandlerRef.current.setInputAction((movement: any) => {
+        const pickedObject = viewer.scene.pick(movement.position);
+        if (Cesium.defined(pickedObject) && pickedObject.id && typeof pickedObject.id.id === "string" && pickedObject.id.id.startsWith("sat-")) {
+          const norad_id = parseInt(pickedObject.id.id.replace("sat-", ""), 10);
+          const sat = satellites?.find(s => s.norad_id === norad_id);
+          if (sat) {
+            onSatelliteSelect(sat);
+          }
         }
-      }
-    }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+      }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+    }
 
     // Clean up input action but keep handler alive
     return () => {

@@ -1,0 +1,40 @@
+<h1>Tyvora Apex: Project Overview</h1>
+<p>Tyvora Apex is an enterprise-grade Space Situational Awareness (SSA) and orbital risk intelligence platform, conceptually described as a &quot;Bloomberg Terminal for Space.&quot; It is designed to provide real-time trajectory visualization, close-approach (conjunction) risk assessment, and an AI-driven advisory system for maneuver synthesis to ensure orbital survival.</p>
+<h2>Core Capabilities</h2>
+<ol>
+<li><p><strong>High-Stakes, Low-Latency Rendering</strong></p>
+<ul>
+<li>The platform utilizes a lightweight Presentation Layer to render geospatial environments via a strict-mounted CesiumJS WebGL globe. </li>
+<li>It is heavily optimized via tile culling and GPU conservation techniques to provide instantaneous, stutter-free rendering (60fps) simultaneously with deep predictive physics.</li>
+</ul>
+</li>
+<li><p><strong>SGP4 Propagation &amp; Ephemeris Engine</strong></p>
+<ul>
+<li>The core engine uses <code>satellite.js</code> to execute high-frequency Simplified General Perturbations-4 (SGP4) orbital propagation models on live Two-Line Elements (TLE).</li>
+<li>Calculations are transformed from Earth-Centered Inertial (ECI) to Geodetic coordinates.</li>
+<li>Orbital paths are recalculated pseudo-real-time to maintain fidelity and present precise spatial vectors to operators.</li>
+</ul>
+</li>
+<li><p><strong>Autonomous Collision-Resolution &amp; Advisory Unit</strong></p>
+<ul>
+<li>The system separates complex computational physics workloads into an independent Compute Layer backend API, offloading high-resolution collision probability and miss-distance covariance calculations.</li>
+<li><strong>The Burn-Vector Engine</strong>: When a collision probability breach is detected, the backend executes a Clohessy-Wiltshire (CW) relative motion equation solver. It computes the necessary drift rate and synthesizes the optimal Delta-V vector (in m/s) and burn direction (e.g., PROGRADE) needed for an evasion maneuver.</li>
+<li><strong>AI Moat (Human-in-the-Loop)</strong>: An integrated RAG-based AI &quot;Advisory Unit&quot; ingests raw telemetry, performs contextual historical lookups, and automatically triggers emergency override states when collision probability exceeds <code>0.01%</code>. It surfaces the physics-backed Delta-V evasion burns to human operators for final &quot;Verify &amp; Execute&quot; authorization.</li>
+</ul>
+</li>
+</ol>
+<h2>Architectural Philosophy</h2>
+<ul>
+<li><strong>Cloud-Native SaaS</strong>: By isolating maneuver strategy computation from the spatial rendering loop via an API, Tyvora achieves predictable horizontal scalability for multi-tenant SaaS environments and protects intellectual property algorithms.</li>
+<li><strong>Mission Control UX</strong>: The interface is stripped of unnecessary web padding. It adopts a high-contrast industrial palette (Charcoal, Teal, Red) and strictly monospaced data grids to present critical information efficiently.</li>
+</ul>
+<h2>Technical Stack</h2>
+<ul>
+<li><strong>Core Engine:</strong> Next.js 14, React 18, TypeScript</li>
+<li><strong>3D Visualization:</strong> CesiumJS (WebGL, WebAssembly-accelerated)</li>
+<li><strong>Physics Modeling:</strong> satellite.js (SGP4/SDP4 mathematical models)</li>
+<li><strong>UI/UX &amp; Styling:</strong> Tailwind CSS, Framer Motion (Hardware-accelerated Springs)</li>
+<li><strong>Typography:</strong> Orbitron (Display), JetBrains Mono (Data)</li>
+<li><strong>Database/Backend:</strong> Supabase (for telemetry data and schema management, as seen in the project root)</li>
+</ul>
+<p>In summary, Tyvora Apex represents a paradigm shift in aerospace defense and collision avoidance. It seamlessly combines highly complex orbital physics compute operations, sophisticated AI advisory tools, and top-tier WebGL visualizations into a scalable, high-performance web platform.</p>

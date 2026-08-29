@@ -117,3 +117,16 @@ body {
 .neon-text-purple {
   text-shadow: 0 0 10px rgba(139, 92, 246, 0.5);
 }
+
+/* Eliminate default Cesium infoBox iframe and selection wrapper overlapping */
+.cesium-infoBox,
+.cesium-infoBox-defaultTable,
+.cesium-selection-wrapper,
+.cesium-viewer-infoBoxContainer,
+.cesium-widget-credits {
+  display: none !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  visibility: hidden !important;
+}
+

@@ -1,8 +1,8 @@
-import { fetchSatelliteTLE } from "./services/spaceTrackService";
+import { fetchSatelliteTLEs } from "./services/spaceTrackService";
 
 /**
  * Direct Telemetry Test Script
- * Runs the fetchSatelliteTLE logic with NORAD ID 25544 (ISS) to verify credentials and connectivity.
+ * Runs the fetchSatelliteTLEs logic with NORAD ID 25544 (ISS) to verify credentials and connectivity.
  */
 async function runTest() {
   console.log("=== TYVORA INGESTION PIPELINE: STARTING TEST ===");
@@ -10,7 +10,7 @@ async function runTest() {
 
   try {
     // Invoke the ingestion service function
-    await fetchSatelliteTLE(testNoradId);
+    await fetchSatelliteTLEs([testNoradId]);
     console.log("=== TYVORA INGESTION PIPELINE: TEST RUN COMPLETION ===");
   } catch (error) {
     console.error("=== TYVORA INGESTION PIPELINE: TEST RUN FAILURE ===");

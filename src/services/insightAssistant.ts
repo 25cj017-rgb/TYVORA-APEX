@@ -1,17 +1,6 @@
 import { searchRegulations } from "./vectorDb";
-
-export interface ConjunctionEvent {
-  id: string;
-  primaryObject: string;
-  secondaryObject: string;
-  tca: string;
-  missDistance: number;
-  collisionProbability: number;
-  severity: "LOW" | "HIGH" | "CRITICAL" | string;
-  radialMiss: number;
-  inTrackMiss: number;
-  crossTrackMiss: number;
-}
+import { ConjunctionEvent } from "../types";
+export type { ConjunctionEvent };
 
 /**
  * Technical context-aware explainRisk helper.
