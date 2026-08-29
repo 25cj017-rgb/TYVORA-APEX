@@ -245,16 +245,31 @@ export default function SpaceGlobe({
           viewer.cesiumWidget.creditContainer.style.display = "none";
         }
 
-        // Camera: Smooth flyTo on mount to an initial 'Earth View' altitude of 15,000,000 meters
-        viewer.camera.flyTo({
-          destination: Cesium.Cartesian3.fromDegrees(-75.0, 15.0, 15000000.0),
+        // Camera: Set initial position so the FULL Earth is immediately visible on load.
+        // Centered over the equator, straight-down view, 20,000km altitude = full Earth in frame.
+        viewer.camera.setView({
+          destination: Cesium.Cartesian3.fromDegrees(20.0, 20.0, 22000000.0),
           orientation: {
             heading: Cesium.Math.toRadians(0.0),
-            pitch: Cesium.Math.toRadians(-35.0), // 3D tilted angle of scale
+            pitch: Cesium.Math.toRadians(-90.0), // Straight down — full globe always visible
             roll: 0.0,
           },
-          duration: 3.5,
         });
+
+        // Then gently animate to the premium 3D tilt angle after a short delay
+        setTimeout(() => {
+          if (viewerRef.current) {
+            viewerRef.current.camera.flyTo({
+              destination: Cesium.Cartesian3.fromDegrees(20.0, 18.0, 18000000.0),
+              orientation: {
+                heading: Cesium.Math.toRadians(0.0),
+                pitch: Cesium.Math.toRadians(-45.0), // Slight 3D tilt after globe is visible
+                roll: 0.0,
+              },
+              duration: 4.0,
+            });
+          }
+        }, 1000);
 
         // 2B. Handle Landing/Portal Click Interactions
         if (isLandingMode) {
