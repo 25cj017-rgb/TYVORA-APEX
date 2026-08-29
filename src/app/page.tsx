@@ -474,8 +474,24 @@ export default function Home() {
   ] : [];
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-[#050505] text-zinc-100 font-sans text-[12px] select-none cursor-none">
+    <div className="relative w-screen h-screen overflow-hidden bg-black text-zinc-100 font-sans text-[12px] select-none cursor-none">
       <CustomCursor />
+
+      {/* GLOBAL 3D BACKGROUND (Runs continuously across all stages) */}
+      <div className="absolute inset-0 z-0 pointer-events-auto overflow-hidden">
+        {mounted && (
+          <SpaceGlobe 
+            satellites={activeSatellites.length > 0 ? activeSatellites : INITIAL_SATELLITES}
+            debrisObjects={liveDebris}
+            selectedSatellite={selectedSatellite || INITIAL_SATELLITES[0]} 
+            onSatelliteSelect={setSelectedSatellite}
+            isLandingMode={stage === "portal-landing"}
+            onGlobeClick={handleLandingClick}
+            evasionPlan={evasionPlan}
+            selectedConjunction={selectedConjunction}
+          />
+        )}
+      </div>
 
       {/* TRAJECTORY DIVERGENCE VIEW — full screen overlay */}
       {isTrajectoryMode && selectedConjunction && (
@@ -495,29 +511,6 @@ export default function Home() {
         className={`absolute top-6 right-8 w-32 md:w-48 z-[100] object-contain hover:scale-105 hover:-rotate-1 transition-all duration-1000 cursor-none ${stage === 'dashboard' ? 'opacity-0 pointer-events-none translate-y-[-10px]' : 'opacity-90 hover:opacity-100'}`} 
         style={{ mixBlendMode: 'screen', filter: 'contrast(2.5) brightness(0.6) grayscale(100%)' }} 
       />
-      
-      {/* IMMERSIVE LANDING & LOGIN Backdrops */}
-      <AnimatePresence>
-        {stage !== "dashboard" && mounted && (
-          <motion.div 
-            key="landing-background"
-            initial={{ opacity: 0 }}
-            animate={{ 
-              opacity: 1,
-              scale: isTransitioning ? 1.08 : 1.05,
-              filter: isTransitioning ? "blur(3px)" : "blur(0px)"
-            }}
-            style={{ 
-              backgroundImage: "url('/tyvora_landing_background.png')",
-              x: bgX,
-              y: bgY
-            }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 1.2, ease: "easeInOut" }}
-            className="absolute -inset-10 z-0 bg-cover bg-left md:bg-center no-repeat"
-          />
-        )}
-      </AnimatePresence>
 
       {/* PORTAL INTERACTIVE PANEL */}
       <AnimatePresence mode="wait">
@@ -529,8 +522,7 @@ export default function Home() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            onClick={handleLandingClick}
-            className="absolute inset-0 z-10 flex flex-col md:grid md:grid-cols-2 p-8 md:p-20 cursor-pointer"
+            className="absolute inset-0 z-10 flex flex-col md:grid md:grid-cols-2 p-8 md:p-20 pointer-events-none"
           >
             {/* Left side is left empty to showcase the premium crescent Earth photograph */}
             <div className="flex-1 md:col-span-1" />
@@ -654,7 +646,7 @@ export default function Home() {
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 1.1 }}
-            className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-zinc-950 font-mono text-[10px] tracking-widest text-zinc-400"
+            className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-zinc-950/70 backdrop-blur-md font-mono text-[10px] tracking-widest text-zinc-400"
           >
             <motion.div 
               animate={{ rotate: 360 }}
@@ -679,10 +671,10 @@ export default function Home() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ duration: 0.8 }}
-            className="w-full h-full flex flex-col overflow-hidden z-10 bg-[#050505]"
+            className="w-full h-full flex flex-col overflow-hidden z-10 bg-transparent pointer-events-none"
           >
             {/* SLEEK TOP NAVIGATION BAR */}
-            <header className="h-13 px-6 bg-zinc-950/90 border-b border-zinc-800/80 backdrop-blur-xl flex items-center justify-between z-40 shrink-0 font-mono">
+            <header className="h-13 px-6 bg-zinc-950/90 border-b border-zinc-800/80 backdrop-blur-xl flex items-center justify-between z-40 shrink-0 font-mono pointer-events-auto">
               <div className="flex items-center gap-4">
                 <span className="font-extrabold text-sm tracking-[0.22em] text-zinc-100 flex items-center gap-2.5 font-orbitron">
                   <span className="w-2 h-2 bg-[#00ffcc] rounded-full shadow-[0_0_10px_#00ffcc]" />
@@ -746,7 +738,7 @@ export default function Home() {
                     animate={{ width: 350, opacity: 1, x: 0 }}
                     exit={{ width: 0, opacity: 0, x: -20 }}
                     transition={{ duration: 0.35, ease: "easeInOut" }}
-                    className="h-full bg-zinc-950/95 border-r border-zinc-800/80 backdrop-blur-2xl z-30 flex flex-col shrink-0 shadow-2xl overflow-hidden font-mono text-[10px]"
+                    className="h-full bg-zinc-950/95 border-r border-zinc-800/80 backdrop-blur-2xl z-30 flex flex-col shrink-0 shadow-2xl overflow-hidden font-mono text-[10px] pointer-events-auto"
                   >
                     <div className="p-4 border-b border-zinc-850 flex items-center justify-between">
                       <div className="flex items-center gap-2">
@@ -853,7 +845,7 @@ export default function Home() {
               </AnimatePresence>
 
               {/* MAIN 3D GLOBE KERNEL */}
-              <div className="flex-1 h-full relative overflow-hidden bg-black">
+              <div className="flex-1 h-full relative overflow-hidden pointer-events-none">
                 
                 {/* 1. TOP-LEFT FLOATING COMMAND TOOLBAR */}
                 <div className="absolute top-4 left-4 z-20 pointer-events-auto flex items-center gap-3">
@@ -938,22 +930,7 @@ export default function Home() {
                   <TelemetryGaugeOverlay velocity={selectedSatellite?.norad_id === 25544 ? 7.66 : 7.5} altitude={selectedSatellite?.norad_id === 25544 ? 420.5 : 500} latency={telemetryPing} />
                 </div>
 
-                {/* 3. CENTER CESIUM GLOBE */}
-                {selectedSatellite ? (
-                  <SpaceGlobe 
-                    satellites={activeSatellites}
-                    debrisObjects={liveDebris}
-                    selectedSatellite={selectedSatellite} 
-                    onSatelliteSelect={setSelectedSatellite}
-                    isLandingMode={false}
-                    evasionPlan={evasionPlan}
-                    selectedConjunction={selectedConjunction}
-                  />
-                ) : (
-                  <div className="flex-1 h-full flex items-center justify-center font-mono text-zinc-500 bg-zinc-950">
-                    LOADING 3D VECTOR GLOBE CORE...
-                  </div>
-                )}
+                {/* 3. CENTER CESIUM GLOBE (Moved to Global Background) */}
 
                 {/* 4. BOTTOM FLOATING CONJUNCTION & TREND HUD DECK */}
                 {selectedConjunction && (
@@ -1098,7 +1075,7 @@ export default function Home() {
                     animate={{ width: 380, opacity: 1, x: 0 }}
                     exit={{ width: 0, opacity: 0, x: 20 }}
                     transition={{ duration: 0.35, ease: "easeInOut" }}
-                    className="h-full bg-zinc-950/95 border-l border-zinc-800/80 backdrop-blur-2xl z-30 flex flex-col shrink-0 shadow-2xl overflow-hidden"
+                    className="h-full bg-zinc-950/95 border-l border-zinc-800/80 backdrop-blur-2xl z-30 flex flex-col shrink-0 shadow-2xl overflow-hidden pointer-events-auto"
                   >
                     <div className="p-3.5 border-b border-zinc-850 flex items-center justify-between font-mono text-[10px]">
                       <div className="flex items-center gap-2">
