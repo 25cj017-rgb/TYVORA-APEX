@@ -83,7 +83,7 @@ export default function AssistantChat({ selectedConjunction, onManeuverExecute }
           {
             id: `msg-asst-${nextIdOffset + 1}`,
             sender: "assistant",
-            text: `I have synthesized an optimal evasion burn vector for ${selectedConjunction.primaryObject}. A ${strategy.burnDirection} burn of ${strategy.deltaV_m_s} m/s is required to achieve a safe ${strategy.projectedMissDistanceKm}km clearance. Awaiting Human-in-the-Loop authorization.`,
+            text: `I have synthesized an optimal evasion burn vector for ${selectedConjunction.primaryObject}. The satellite is currently on Orbital Corridor 1A. Since Corridors 1B and 1C are congested with active satellite traffic, this maneuver will re-route the trajectory to clear Orbital Corridor 2A. A ${strategy.burnDirection} burn of ${strategy.deltaV_m_s} m/s is required to shift paths and achieve a safe ${strategy.projectedMissDistanceKm}km clearance. Awaiting Human-in-the-Loop authorization.`,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
             isManeuverProposal: true,
             maneuverData: {

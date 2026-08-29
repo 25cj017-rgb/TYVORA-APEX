@@ -74,16 +74,29 @@ export default function SpaceGlobe({
       return;
     }
 
+    const scriptId = "cesium-script";
+    const linkId = "cesium-link";
+
+    if (document.getElementById(scriptId)) {
+      // Script is already in the DOM (e.g., from a previous strict-mode mount)
+      // We just need to wait for it to finish loading.
+      const existingScript = document.getElementById(scriptId) as HTMLScriptElement;
+      existingScript.addEventListener("load", () => setCesiumLoaded(true));
+      return;
+    }
+
     window.CESIUM_BASE_URL = "https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/";
 
     // Load Widgets CSS stylesheet
     const link = document.createElement("link");
+    link.id = linkId;
     link.rel = "stylesheet";
     link.href = "https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Widgets/widgets.css";
     document.head.appendChild(link);
 
     // Load Main JS Library
     const script = document.createElement("script");
+    script.id = scriptId;
     script.src = "https://cesium.com/downloads/cesiumjs/releases/1.115/Build/Cesium/Cesium.js";
     script.async = true;
     script.onload = () => {
@@ -94,10 +107,8 @@ export default function SpaceGlobe({
     };
     document.head.appendChild(script);
 
-    return () => {
-      document.head.removeChild(link);
-      document.head.removeChild(script);
-    };
+    // Removing the cleanup function prevents React 18 Strict Mode from instantly
+    // unmounting and removing the script, which aborts the network request.
   }, []);
 
   // Memoize viewer options to prevent unnecessary re-renders and re-initialization lag
@@ -201,7 +212,8 @@ export default function SpaceGlobe({
         viewer.scene.skyAtmosphere.show = true;
 
         // Lighting settings for realistic day/night terminator
-        viewer.scene.globe.enableLighting = true;
+        // Disabled for demo purposes so the globe is always brightly visible
+        viewer.scene.globe.enableLighting = false;
         viewer.scene.sun.show = true;
 
         // Synchronize accurate sun position lighting based on current UTC time
