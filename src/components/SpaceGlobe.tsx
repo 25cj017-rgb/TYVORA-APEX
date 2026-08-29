@@ -410,12 +410,13 @@ export default function SpaceGlobe({
         }
 
         // ── DUAL TRAJECTORY VISUALIZATION ──────────────────────────────────
-        // When an evasion burn is authorized, we render TWO distinct paths:
-        //   1. RED solid line  — the original danger trajectory (where the satellite WOULD go)
-        //   2. CYAN dashed arc — the evasion trajectory (where it WILL go after the burn)
-        // This is the "trajectory divergence" view shown in the screenshot.
+        // When an evasion burn is authorized, we render TWO distinct paths on
+        // the REAL 3D CesiumJS globe:
+        //   1. RED glowing solid line  — the original collision-course trajectory
+        //   2. CYAN dashed arc         — the post-burn safe evasion trajectory
+        // Divergence is heavily exaggerated (400x) to be clearly visible in 3D space.
         if (isSelected && evasionPlan) {
-          // PATH 1: ORIGINAL DANGER TRAJECTORY (no burn applied — collision course)
+          // PATH 1: ORIGINAL DANGER TRAJECTORY (no burn — collision course)
           const dangerPositions: any[] = [];
           for (let i = 0; i <= 120; i++) {
             const time = new Date(now.getTime() + i * 60000);
@@ -438,31 +439,31 @@ export default function SpaceGlobe({
               name: `${name} DANGER Trajectory`,
               polyline: {
                 positions: dangerPositions,
-                width: 2.5,
+                width: 4,
                 material: new Cesium.PolylineGlowMaterialProperty({
-                  glowPower: 0.3,
-                  color: Cesium.Color.fromCssColorString("#ef4444").withAlpha(0.85),
+                  glowPower: 0.5,
+                  color: Cesium.Color.fromCssColorString("#ef4444").withAlpha(0.95),
                 }),
               },
             });
             entityRefs.current.push(dangerPath);
 
-            // Danger label at the point of closest approach (midpoint of arc)
-            const midIdx = Math.floor(dangerPositions.length * 0.6);
+            // ⚠ COLLISION TRAJECTORY label at 55% of the path
+            const midIdx = Math.floor(dangerPositions.length * 0.55);
             if (dangerPositions[midIdx]) {
               const dangerLabel = viewer.entities.add({
                 position: dangerPositions[midIdx],
                 label: {
                   text: "⚠ COLLISION TRAJECTORY",
-                  font: "bold 11px Inter, monospace",
+                  font: "bold 13px 'Courier New', monospace",
                   style: Cesium.LabelStyle.FILL_AND_OUTLINE,
                   fillColor: Cesium.Color.fromCssColorString("#ef4444"),
                   outlineColor: Cesium.Color.BLACK,
-                  outlineWidth: 3,
+                  outlineWidth: 4,
                   verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                  pixelOffset: new Cesium.Cartesian2(0, -16),
+                  pixelOffset: new Cesium.Cartesian2(0, -18),
                   showBackground: true,
-                  backgroundColor: new Cesium.Color(0.05, 0, 0, 0.8),
+                  backgroundColor: new Cesium.Color(0.08, 0, 0, 0.85),
                 },
               });
               entityRefs.current.push(dangerLabel);
@@ -470,6 +471,8 @@ export default function SpaceGlobe({
           }
 
           // PATH 2: EVASION TRAJECTORY (burn applied — safe clearance path)
+          // The altitude divergence is exaggerated by 400x so it is clearly
+          // visible as a diverging arc on the 3D globe.
           const evasionPositions: any[] = [];
           for (let i = 0; i <= 120; i++) {
             const time = new Date(now.getTime() + i * 60000);
@@ -481,8 +484,9 @@ export default function SpaceGlobe({
               const longitude = satellite.degreesLong(positionGd.longitude);
               const latitude = satellite.degreesLat(positionGd.latitude);
               let height = positionGd.height * 1000;
-              // Bell-curve divergence: max at mid-point, converging back after TCA
-              const divergence = Math.sin((i / 120) * Math.PI) * (evasionPlan.projectedMissDistanceKm * 1000 * 60);
+              // Bell-curve divergence — peaks at middle of arc, returns toward original
+              // 400x exaggeration makes the separation clearly visible in 3D space
+              const divergence = Math.sin((i / 120) * Math.PI) * (evasionPlan.projectedMissDistanceKm * 1000 * 400);
               if (evasionPlan.burnDirection === "PROGRADE") {
                 height += divergence;
               } else {
@@ -496,31 +500,31 @@ export default function SpaceGlobe({
               name: `${name} Evasion Path`,
               polyline: {
                 positions: evasionPositions,
-                width: 3.5,
+                width: 4,
                 material: new Cesium.PolylineDashMaterialProperty({
                   color: Cesium.Color.fromCssColorString("#00ffcc"),
-                  dashLength: 22.0,
+                  dashLength: 18.0,
                 }),
               },
             });
             entityRefs.current.push(evasionArc);
 
-            // Evasion label at divergence peak
+            // ✓ MANEUVER label at the peak of the evasion arc (50% of path)
             const peakIdx = Math.floor(evasionPositions.length * 0.5);
             if (evasionPositions[peakIdx]) {
               const evasionLabel = viewer.entities.add({
                 position: evasionPositions[peakIdx],
                 label: {
                   text: `✓ MANEUVER  ΔV ${evasionPlan.deltaV_m_s} m/s | ${evasionPlan.burnDirection}`,
-                  font: "bold 11px Inter, monospace",
+                  font: "bold 13px 'Courier New', monospace",
                   style: Cesium.LabelStyle.FILL_AND_OUTLINE,
                   fillColor: Cesium.Color.fromCssColorString("#00ffcc"),
                   outlineColor: Cesium.Color.BLACK,
-                  outlineWidth: 3,
+                  outlineWidth: 4,
                   verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-                  pixelOffset: new Cesium.Cartesian2(0, -16),
+                  pixelOffset: new Cesium.Cartesian2(0, -18),
                   showBackground: true,
-                  backgroundColor: new Cesium.Color(0, 0.05, 0.05, 0.8),
+                  backgroundColor: new Cesium.Color(0, 0.06, 0.06, 0.85),
                 },
               });
               entityRefs.current.push(evasionLabel);
@@ -528,6 +532,7 @@ export default function SpaceGlobe({
           }
         }
         // ── END DUAL TRAJECTORY ─────────────────────────────────────────────
+
 
         // Real-time dynamic sampling property for continuous live orbital motion
         const positionProperty = new Cesium.SampledPositionProperty();
