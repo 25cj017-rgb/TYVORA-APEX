@@ -12,8 +12,6 @@ import { supabase } from "../lib/supabase";
 
 // Mock/Live data fetchers
 async function fetchSatellites(): Promise<ValidatedSatellite[]> {
-  // Bypassing Supabase fetch to avoid network errors in the frontend demo
-  /*
   try {
     const { data, error } = await supabase.from("satellites").select("*");
     if (data && !error && data.length > 0) {
@@ -34,7 +32,6 @@ async function fetchSatellites(): Promise<ValidatedSatellite[]> {
   } catch (err) {
     console.warn("Supabase fetch failed, falling back to mock active satellites:", err);
   }
-  */
 
   const rawData = [
     {
@@ -127,8 +124,6 @@ async function fetchSatellites(): Promise<ValidatedSatellite[]> {
 }
 
 async function fetchConjunctionAlerts(satellites?: ValidatedSatellite[]): Promise<ValidatedConjunctionEvent[]> {
-  // Bypassing Supabase/API fetch to ensure mock data is shown for the frontend demo
-  /*
   if (satellites && satellites.length >= 2) {
     try {
       const response = await fetch("/api/compute/conjunctions", {
@@ -149,7 +144,6 @@ async function fetchConjunctionAlerts(satellites?: ValidatedSatellite[]): Promis
       console.warn("Backend sweeper API unavailable, using mock fallback:", err);
     }
   }
-  */
 
   const rawData = [
     {
